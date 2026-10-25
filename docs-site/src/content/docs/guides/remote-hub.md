@@ -86,6 +86,11 @@ If a client saved a remote `http://` Hub URL before the secure transport rule, i
 operations now return `insecure_http_refused`. Run `ocx disconnect` locally, then reconnect
 to the Hub with `https://` (or use loopback HTTP when both sides are on the same machine).
 
+GUI pairing permits HTTP management origins on `localhost`, IPv6 `::1`, and valid dotted-decimal
+IPv4 addresses throughout `127.0.0.0/8`, including `127.0.0.2`. The shared loopback check also means
+bindings in that IPv4 range do not require data-plane API authentication; management API requests
+still require their own credentials. Pairing codes remain bound to the exact browser and server origins.
+
 Rotate a connected client with a fresh transient authority:
 
 ```bash

@@ -173,7 +173,7 @@ management token creation, validation, or permission hardening fails, `/api/*` r
 valid scoped capability return 503 while `/v1/*` and unauthenticated `/healthz` continue to operate.
 Windows ACL hardening results must be checked explicitly because an `icacls` timeout is a soft failure in the shared secret helper.
 
-Local dashboard page entry requires a loopback binding, a valid parseable loopback `Host`, and an
+The shared `src/server/auth-cors.ts` loopback check accepts valid dotted-decimal IPv4 `127.0.0.0/8`, `localhost` and IPv6 `::1` for API-auth requirements, management origins and HTTP GUI pairing. Local dashboard page entry requires a loopback binding, a valid parseable loopback `Host`, and an
 exact request origin. A hub may additionally enable `hub.managementIngress`, a second management
 surface bound exactly to `127.0.0.1` for a local Tailscale Serve or operator TLS frontend. That
 listener serves only packaged GUI/SPA routes, `GET`/`POST /opencodex-session`, and `/api/*`; all data,

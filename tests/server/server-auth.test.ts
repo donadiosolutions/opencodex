@@ -546,6 +546,21 @@ describe("server local API auth", () => {
     expect(isApiAuthRequired(config("127.0.0.1"))).toBe(false);
   });
 
+  test("the entire IPv4 loopback range does not require API auth", () => {
+    for (const hostname of ["127.0.0.0", "127.0.0.2", "127.1.2.3", "127.255.255.255", " 127.0.0.2. "]) {
+      expect(isLoopbackHostname(hostname)).toBe(true);
+      expect(isApiAuthRequired(config(hostname))).toBe(false);
+    }
+  });
+
+  test("non-loopback and malformed IPv4 hosts still require API auth", () => {
+    for (const hostname of ["126.255.255.255", "128.0.0.0", "0.0.0.0", "127.256.0.1", "127.0.0", "127.1",
+      "127.0.0.1.example.com", "127.0.0.2:10101", "127.00.0.2", "127.0.0.-1", "127.0.0.2.."]) {
+      expect(isLoopbackHostname(hostname)).toBe(false);
+      expect(isApiAuthRequired(config(hostname))).toBe(true);
+    }
+  });
+
   test("non-loopback binding requires env token before startup", () => {
     delete process.env.OPENCODEX_API_AUTH_TOKEN;
     expect(isApiAuthRequired(config("0.0.0.0"))).toBe(true);

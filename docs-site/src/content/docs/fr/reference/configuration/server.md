@@ -132,7 +132,7 @@ L'utilisation à distance ne nécessite pas de liaison à distance. Gardez le bo
 ssh -L 20100:localhost:10100 you@remote
 ```
 
-N'importe quel port local fonctionne. Les requêtes dont l'hôte se résout en `localhost`, `127.0.0.1` ou `::1` restent
+N'importe quel port local fonctionne. Les requêtes dont l'hôte se résout en `localhost`, `127.0.0.0/8` ou `::1` restent
 bouclage quel que soit le port, donc `http://localhost:20100/v1` fonctionne. Définissez cette base URL dans le client ;
 `ocx` écrit uniquement l'adresse locale `127.0.0.1` par défaut dans la configuration du client géré.
 

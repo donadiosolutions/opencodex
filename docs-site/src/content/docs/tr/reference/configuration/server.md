@@ -143,7 +143,7 @@ yönlendirin:
 ssh -L 20100:localhost:10100 you@remote
 ```
 
-Herhangi bir yerel port çalışır. Host'u `localhost`, `127.0.0.1` veya `::1`
+Herhangi bir yerel port çalışır. Host'u `localhost`, `127.0.0.0/8` veya `::1`
 olarak çözümlenen istekler porttan bağımsız olarak geri döngü kalır, bu nedenle
 `http://localhost:20100/v1` çalışır. Bu temel URL'yi istemcide ayarlayın; `ocx`
 yönetilen istemci yapılandırmasına yalnızca varsayılan yerel `127.0.0.1`

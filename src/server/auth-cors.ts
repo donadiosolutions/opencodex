@@ -1,6 +1,7 @@
 import { providerRelativeSendPathConfigError } from "../config/provider-relative-send-path";
 import { contextTierRecordConfigError, modelCapabilitiesConfigError } from "../config/provider-validation";
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { isIPv4 } from "node:net";
 import { initialModelSelection } from "../providers/initial-model-selection";
 import { extractAccountId } from "../oauth/chatgpt";
 import { formatErrorResponse } from "../bridge";
@@ -326,7 +327,8 @@ export function isLoopbackHostname(hostname: string | undefined): boolean {
   // A fully-qualified "localhost." is the same host as "localhost": curl and some clients
   // send the trailing dot verbatim, and refusing it 403s a legitimate loopback caller.
   const normalized = (hostname ?? "127.0.0.1").trim().toLowerCase().replace(/\.$/, "");
-  return normalized === "" || normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+  return normalized === "" || normalized === "localhost" || normalized === "::1" || normalized === "[::1]"
+    || (normalized.startsWith("127.") && isIPv4(normalized));
 }
 
 export function isApiAuthRequired(config: Pick<OcxConfig, "hostname">): boolean {

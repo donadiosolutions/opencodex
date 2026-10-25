@@ -1486,6 +1486,25 @@ describe("management and data-plane credential separation", () => {
     }
   });
 
+  test("hub pairing over HTTP accepts IPv4 loopback addresses beyond 127.0.0.1", () => {
+    for (const hostname of ["127.0.0.0", "127.0.0.2", "127.42.7.9", "127.255.255.255"]) {
+      const origin = `http://${hostname}:10101`;
+      const config = hubConfig(origin);
+      const state = initializeManagementAuthState(config);
+      if (!state.available) throw new Error("expected management auth state");
+      const now = 1_800_000_000_000;
+      const created = createGuiPairingGrant(origin, config, state, now);
+      const request = new Request(`${origin}/opencodex-session`, {
+        method: "POST", headers: { Host: `${hostname}:10101`, Origin: origin },
+      });
+      expect(consumeGuiPairingGrant(request, { grant: created.grant }, config, state, now + 1)).toMatchObject({
+        browserOrigin: origin, serverOrigin: origin, issuance: "pairing",
+      });
+      expect(state.pairingGrants.size).toBe(0);
+      expect(consumeGuiPairingGrant(request, { grant: created.grant }, config, state, now + 2)).toBeNull();
+    }
+  });
+
   test("non-loopback plaintext HTTP cannot carry a pairing grant, and no opt-in re-opens it", () => {
     // An earlier revision let this exchange succeed when `remoteGui.allowInsecureHttp` was
     // true, and this test asserted exactly that. The flag is retired: a reusable grant on

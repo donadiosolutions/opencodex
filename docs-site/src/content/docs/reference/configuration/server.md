@@ -399,7 +399,7 @@ Remote use does not require a remote bind. Keep loopback and forward it:
 ssh -L 20100:localhost:10100 you@remote
 ```
 
-Any local port works. Requests whose Host resolves to `localhost`, `127.0.0.1`, or `::1` remain
+Any local port works. Requests whose Host is `localhost`, a valid dotted-decimal IPv4 address in `127.0.0.0/8`, or `::1` remain
 loopback regardless of port, so `http://localhost:20100/v1` works. Set that base URL in the client;
 `ocx` writes only the default local `127.0.0.1` address into managed client config.
 
