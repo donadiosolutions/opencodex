@@ -25,6 +25,7 @@ import {
 } from "../lib/errors";
 import { reportDispatchSends, type RequestExecutionBudget, type SingleUseDispatchPermit } from "../lib/request-execution-budget";
 import type { AdmissionLease } from "../lib/admission";
+import { resolveContextPrincipal, type DataPlaneAdmission } from "./auth-cors";
 import { readBoundedResponseBody } from "../lib/bounded-body";
 import { redactSecretString } from "../lib/redact";
 import { resolveClientRetryAfter } from "../lib/retry-after";
@@ -181,7 +182,7 @@ export interface HandleNativeChatOptions {
   req: Request;
   config: OcxConfig;
   logCtx: RequestLogContext;
-  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease };
+  logIds?: { requestId: string; start: number; turnAdmissionLease?: AdmissionLease; admission?: DataPlaneAdmission };
   route: RouteResult;
   chatBody: Rec;
   requestedModel: string;
@@ -211,6 +212,12 @@ export interface NativeChatExecution extends HandleNativeChatOptions {
   onFirstOutput?: () => void;
   /** The lease a streamed body holds; defaults to `logIds.turnAdmissionLease`. */
   turnAdmissionLease?: AdmissionLease;
+  /**
+   * The request's resolved data-plane admission, when the caller carries it without `logIds`.
+   * A combo child runs on the parent's log row, so it receives the admitted identity here or
+   * its reasoning replay scope can never establish a caller principal (PF-07).
+   */
+  admission?: DataPlaneAdmission;
 }
 
 /**
@@ -248,6 +255,8 @@ export function createNativeChatComboSource(input: {
   requestedModel: string;
   requestedStream: boolean;
   translatorBudget: TranslatorBudget;
+  /** The request's data-plane admission; native children inherit it for replay scope. */
+  admission?: DataPlaneAdmission;
 }): ComboProtocolSource {
   return {
     inbound: "chat",
@@ -266,6 +275,7 @@ export function createNativeChatComboSource(input: {
       comboDispatchPermit: child.comboDispatchPermit,
       onFirstOutput: child.onFirstOutput,
       ...(child.turnAdmissionLease ? { turnAdmissionLease: child.turnAdmissionLease } : {}),
+      ...(input.admission ? { admission: input.admission } : {}),
     }, child.attemptHandle),
   };
 }
@@ -344,7 +354,8 @@ export async function runNativeChatAttempt(
   const physicalBudget = sendBudget ?? createInferenceSendBudget(req, logCtx);
   let activeAdapter: ProviderAdapter = createOpenAIChatAdapter(activeProvider);
   let activeRequest: AdapterRequest;
-  const replayScope = nativeChatReplayScope(req.headers);
+  const replayScope = nativeChatReplayScope(req.headers,
+    resolveContextPrincipal(req, config, execution.admission ?? logIds?.admission));
   let retainedRequestBytes = 0;
   const releaseRetainedRequest = () => {
     if (retainedRequestBytes === 0) return;
