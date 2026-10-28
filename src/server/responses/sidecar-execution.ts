@@ -34,6 +34,7 @@ import {
 } from "../../oauth/generic-account-failover";
 import { classifyKiroRefusal } from "../../adapters/kiro-refusal";
 import { isNonReplayableResponse, SendBudgetExhaustedError } from "../../lib/upstream-retry";
+import { isVerifiedModelNotInPlanResponse, markVerifiedModelNotInPlanResponse } from "../../lib/errors";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, admissionModelDeniedResponse } from "../admission-model-scope";
 import { noteKiroMonthlyRefusal, noteKiroServedSuccess } from "../../providers/kiro-usage";
@@ -202,7 +203,7 @@ export async function executeResponsesSidecars(
   }
 
   // Image / web-search sidecars: plan once, then dispatch with runTurn-aware priority.
-  // Routed-compaction turns must NOT hit the image bridge: compaction clears tools/_webSearch but
+  // Routed-compaction turns must NOT hit the image bridge: compaction disables tool execution but
   // leaves _imageGeneration, so planImageBridge would activate and return a normal Responses
   // completion instead of the synthetic compaction item Codex expects (#424).
   //
@@ -600,6 +601,7 @@ export async function executeResponsesSidecars(
         return fetch.unpacedFetch ?? fetch;
       },
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },
@@ -646,10 +648,13 @@ export async function executeResponsesSidecars(
     if (imgResponse.body) {
       const imgTurnAc = new AbortController();
       imgTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
+      const tracked = new Response(trackStreamLifetime(imgResponse.body, imgTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: imgResponse.status,
         headers: imgResponse.headers,
       });
+      // The wrapper is a new object; a verified plan refusal keeps its provenance across it.
+      if (isVerifiedModelNotInPlanResponse(imgResponse)) markVerifiedModelNotInPlanResponse(tracked);
+      return tracked;
     }
     releaseSearchProbeLease();
     return imgResponse;
@@ -732,6 +737,7 @@ export async function executeResponsesSidecars(
       abortSignal: options.abortSignal,
       onFirstOutput: noteSidecarOutput,
       onRequestBuilt: request => {
+        if (typeof request.usageLog?.inputTokens === "number") logCtx.usageLogInputTokens = request.usageLog.inputTokens;
         recordAdapterReasoning(logCtx, request);
         recordAdapterTier(logCtx, request);
       },
@@ -787,10 +793,12 @@ export async function executeResponsesSidecars(
     if (wsResponse.body) {
       const wsTurnAc = new AbortController();
       wsTurnAc.signal.addEventListener("abort", cancelResponseCompletion, { once: true });
-      return new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
+      const tracked = new Response(trackStreamLifetime(wsResponse.body, wsTurnAc, releaseSearchProbeLease, options.turnAdmissionLease), {
         status: wsResponse.status,
         headers: wsResponse.headers,
       });
+      if (isVerifiedModelNotInPlanResponse(wsResponse)) markVerifiedModelNotInPlanResponse(tracked);
+      return tracked;
     }
     releaseSearchProbeLease();
     return wsResponse;

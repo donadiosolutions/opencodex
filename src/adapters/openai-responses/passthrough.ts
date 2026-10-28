@@ -39,8 +39,8 @@ import {
   createAdapterTierMetadata,
   emittedFastWire,
 } from "../../providers/fastwire";
-import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
-import { scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripChatGptAccessPrograms, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
+import { dropResponsesReasoningInputItems, mapRoutedResponsesReasoningEffort, normalizeConfiguredReasoningSummaryDelivery, sanitizeReasoningInputContent, stripDisabledReasoningSummaries, stripDisabledVerbosity, stripInternalReasoningEnabled, stripNoneReasoningSummary, stripUnsupportedReasoningSummaryDelivery } from "./reasoning";
+import { repairUrlCitationAnnotations, scrubOcxCompactionItems, stripCanonicalOnlyInputItems, stripCanonicalOnlyToolFields, stripCanonicalOnlyTopLevelFields, stripChatGptAccessPrograms, stripInternalChatMessageMetadataPassthrough, stripInvalidItemIds, stripItemIdsWhenUnstored, stripProviderInputItemMetadata, stripRejectedSamplingParams } from "./request-strips";
 import { notePlaintextReasoningDropped } from "./plaintext-reasoning-notice";
 import { stripCanonicalForwardPromptCacheOptions, stripDeprecatedPromptCacheRetention } from "./prompt-cache";
 import { isPlainObject } from "./internal";
@@ -332,7 +332,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       outBody = repairLegacyDottedToolCallNames(outBody);
       // Shared HTTP/WS outbound projection, including concrete combo/fallback destinations.
       if (isOpenAiOperatedResponsesDestination(provider)) {
-        outBody = stripProviderInputItemMetadata(outBody);
+        outBody = repairUrlCitationAnnotations(stripProviderInputItemMetadata(outBody));
       }
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         outBody = stripChatGptAccessPrograms(outBody);
@@ -535,7 +535,10 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
       if (!isCanonicalOpenAiForwardProvider(provider)) {
         validateFinalCustomToolCompatibility(finalBody, provider.supportsResponsesCustomTools);
       }
-      const wireBody = applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName);
+      let wireBody = applyGithubCopilotContextTier(finalBody, provider, parsed.modelId, incoming.providerName);
+      if (isOpenAiOperatedResponsesDestination(provider) || provider.reasoningWireFormat !== "gateway-object") {
+        wireBody = stripInternalReasoningEnabled(wireBody);
+      }
       const body = JSON.stringify(wireBody);
       // All wire rewrites have settled. Parsed intent may differ from this body,
       // and an absent emitted field must not acquire an inferred effective effort.

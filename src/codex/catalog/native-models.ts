@@ -39,7 +39,7 @@ export const NATIVE_GPT6_LUNA_MODEL = "gpt-6-luna";
 
 /**
  * GPT-6.1 Sol, announced 2026-09-29 (https://openai.com/index/introducing-gpt-6-1-sol/).
- * Only Sol moved to 6.1; Astra and Luna stay on GPT-6.
+ * Astra and Luna stay on GPT-6.
  *
  * SELF-DESCRIBED from its own roster row (`/backend-api/codex/models?client_version=0.159.0`,
  * main account, 2026-09-29), pinned in `src/codex/data/roster-pinned-models.json`. It is not a
@@ -52,6 +52,14 @@ export const NATIVE_GPT6_LUNA_MODEL = "gpt-6-luna";
  * decision as the flagships.
  */
 export const NATIVE_GPT61_SOL_MODEL = "gpt-6.1-sol";
+
+/**
+ * GPT-6.1 Terra, announced 2026-10-26 (https://openai.com/index/introducing-gpt-6-1-terra/).
+ * Its verbatim openai/codex models.json row is roster-pinned (captured 2026-10-27):
+ * low..ultra, default low, native 500,000 / 872,000 context, multi-agent v2, Fast only.
+ * Self-described and ungated alongside GPT-5.6 Terra; no default or roster migration.
+ */
+export const NATIVE_GPT61_TERRA_MODEL = "gpt-6.1-terra";
 
 /**
  * Unreleased GPT-6 Astra variant. No public row exists anywhere — neither the codex-rs bundle nor
@@ -68,7 +76,7 @@ export const NATIVE_GPT6_ASTRA_MINOR_MODEL = "gpt-6-astra-minor";
  * Context pair every GPT-6 native ships in its upstream row: a 272,000-token default window
  * against an 872,000-token ceiling (and input limit) reached only through the long-window opt-in.
  * The built-in GPT-6 rows and every configured native (below) inherit this one value, except
- * GPT-6.1 Sol, whose default window is NATIVE_GPT61_SOL_CONTEXT.
+ * GPT-6.1 Sol and Terra, whose default windows are 500,000.
  */
 export const NATIVE_GPT6_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
   Object.freeze({ contextWindow: 272_000, maxContextWindow: 872_000, maxInputTokens: 872_000 });
@@ -83,6 +91,10 @@ export const NATIVE_GPT6_CONTEXT: Readonly<{ contextWindow: number; maxContextWi
  * would assert an input allowance nobody has measured. Overrides therefore clamp to 872,000.
  */
 export const NATIVE_GPT61_SOL_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
+  Object.freeze({ ...NATIVE_GPT6_CONTEXT, contextWindow: 500_000 });
+
+/** GPT-6.1 Terra's native row ships 500,000 default / 872,000 maximum (not the API window). */
+export const NATIVE_GPT61_TERRA_CONTEXT: Readonly<{ contextWindow: number; maxContextWindow: number; maxInputTokens: number }> =
   Object.freeze({ ...NATIVE_GPT6_CONTEXT, contextWindow: 500_000 });
 
 /** Pinned row a configured native borrows its capability metadata from: the current Sol. */
@@ -153,6 +165,7 @@ const selfDescribedNativeModels = new Set<string>([
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT61_TERRA_MODEL,
 ]);
 
 export const SELF_DESCRIBED_NATIVE_OPENAI_MODELS: ReadonlySet<string> = selfDescribedNativeModels;
@@ -255,6 +268,7 @@ const BUILT_IN_NATIVE_OPENAI_MODELS: readonly string[] = Object.freeze([
   NATIVE_DAYBREAK_BLUE_MODEL,
   NATIVE_GPT6_ASTRA_MODEL,
   NATIVE_GPT61_SOL_MODEL,
+  NATIVE_GPT61_TERRA_MODEL,
   NATIVE_GPT6_SOL_MODEL, NATIVE_GPT6_LUNA_MODEL,
   NATIVE_GPT6_ASTRA_MINOR_MODEL,
 ]);
@@ -397,8 +411,9 @@ export const NATIVE_MAIN_DRAIN_SENTINEL_MODELS: ReadonlySet<string> = new Set([
   "gpt-5.6-terra",
   "gpt-5.6-luna",
   NATIVE_GPT6_ASTRA_MODEL,
-  // Astra Minor arrives through the gated spread above; the Sol rows and Luna are ungated flagships.
+  // Astra Minor arrives through the gated spread above; Sol, Terra and Luna are ungated.
   NATIVE_GPT61_SOL_MODEL,
   NATIVE_GPT6_SOL_MODEL,
   NATIVE_GPT6_LUNA_MODEL,
+  NATIVE_GPT61_TERRA_MODEL,
 ]);

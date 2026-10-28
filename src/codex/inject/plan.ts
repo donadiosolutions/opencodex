@@ -18,11 +18,12 @@ import {
   journaledInjectedOpenaiBaseUrl,
   journaledInjectedRealtimeWsBaseUrl,
   journaledInjectedRootWebSearch,
+  journaledInjectedSubagentDefaults,
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { stripJournaledOpenaiBaseUrl } from "../injected-marker";
 import { CODEX_CONFIG_PATH, resolveCodexStateDbPath } from "../paths";
-import { transformManagedSubagentDefaults } from "../subagent-defaults";
+import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
 import type { CodexWriteCandidate } from "../write-coordination";
 import {
@@ -41,7 +42,6 @@ import {
   setRootRealtimeWsBaseUrl,
   stripExistingModelProvider,
   stripInjectedOpenaiBaseUrl,
-  stripRootContextWindowOverrides,
 } from "./config-toml";
 import { hasOcxProviderTable, removeOcxSection } from "./remove";
 import {
@@ -80,6 +80,8 @@ export interface CodexInjectionPlanOk {
   injectedRootWebSearch: string | null;
   /** The user-owned root `web_search` line this plan removed, for the journal to carry. */
   replacedRootWebSearch: string | null;
+  /** The marker-owned `[agents]` defaults this plan writes, for the journal to carry; null when none. */
+  injectedSubagentDefaults: WrittenSubagentDefaults | null;
   nativeSubagentDefaultsWarning: string | undefined;
   managedDefaultsMessage: string;
   /**
@@ -129,9 +131,12 @@ export function deriveCodexInjectionPlan(
   // root routing key: inserting that key ahead of a marker-owned first table
   // would otherwise separate the table marker from its header. Ambiguous
   // markers fail closed without writing config, profile, or journal state.
+  // A marked value that no longer matches the journaled write was edited by the
+  // user (#7425); it is adopted into the baseline instead of being cleaned.
   const nativeDefaultsBaseline = transformManagedSubagentDefaults(
     source,
     null,
+    journaledInjectedSubagentDefaults({ readOnly: ctx.journalReadOnly }),
   );
   if (!nativeDefaultsBaseline.ok) {
     return {
@@ -185,7 +190,8 @@ export function deriveCodexInjectionPlan(
   }
   content = removeProfileSection(content);
   content = stripExistingModelProvider(content);
-  content = stripRootContextWindowOverrides(content);
+  // A root `model_context_window` is never written by OpenCodex, so it is the user's choice and
+  // survives injection (#7425). Codex applies it to every model ahead of the catalog's windows.
   content = normalizeServiceTier(content);
   content = ensureFastModeFeature(content, config?.fastMode);
   // Codex's own web-search switch follows the sidecar's master switch. While the sidecar is off,
@@ -289,6 +295,7 @@ export function deriveCodexInjectionPlan(
   let managedDefaultsMessage = routingOwnershipWarning
     ? `  ⚠️ ${routingOwnershipWarning}\n`
     : "";
+  let injectedSubagentDefaults: WrittenSubagentDefaults | null = null;
   if (managedDefaults.ok) {
     content = managedDefaults.content;
     if (desiredSubagentDefaults && managedDefaults.conflicts.length > 0) {
@@ -297,6 +304,13 @@ export function deriveCodexInjectionPlan(
         .join(", ");
       nativeSubagentDefaultsWarning = `Native Codex sub-agent defaults were not injected: user-owned ${keys} preserved.`;
       managedDefaultsMessage = `  ⚠️ ${nativeSubagentDefaultsWarning}\n`;
+    } else if (desiredSubagentDefaults && !keptUserBaseUrl) {
+      injectedSubagentDefaults = {
+        default_subagent_model: desiredSubagentDefaults.model,
+        ...(desiredSubagentDefaults.reasoningEffort !== undefined
+          ? { default_subagent_reasoning_effort: desiredSubagentDefaults.reasoningEffort }
+          : {}),
+      };
     }
   } else {
     const action =
@@ -386,6 +400,7 @@ export function deriveCodexInjectionPlan(
     keptUserRealtimeWsBaseUrl,
     injectedRootWebSearch: webSearch.wroteValue,
     replacedRootWebSearch: webSearch.replacedUserLine,
+    injectedSubagentDefaults,
     nativeSubagentDefaultsWarning,
     managedDefaultsMessage,
     historyRelabelRefusal: observedHistoryRefusal,
