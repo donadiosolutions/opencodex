@@ -21,6 +21,7 @@ import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
 import { pacingObserver, transportObserver } from "../transaction-capture";
 import { captureRetryDelay } from "../transaction-recovery-capture";
+import { isLocalUpstream } from "../../lib/local-upstream";
 import {
   transientRetryPolicyFor,
   rateLimitRetryDelayMs,
@@ -142,8 +143,7 @@ export function createAdapterContinuations(
   } = transportState;
   const { route, translatorBudget, inboundWire, parsed } = requestState;
   const { routedCompaction } = sidecarState;
-  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs, localUpstream } = adapterExchange;
-  const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream });
+  const { upstream, connectMs, rateLimitPolicy, stallTimeoutMs } = adapterExchange;
   const {
     adapterDispatchBudget,
     noteAdapterPhysicalSend,
@@ -253,7 +253,7 @@ export function createAdapterContinuations(
             transportState.activeAdapter.fetchResponse!(builtContinuationRequest, {
               kiroPreferAccountFailover: route.providerName === "kiro" && isGenericOAuthFailoverEnabled(config, "kiro"),
               abortSignal: upstream.signal,
-              timeoutMs: connectMs,
+              timeoutMs: route.provider.authMode === "forward" ? connectMs : 0,
               sendBudget: adapterDispatchBudget,
               onPhysicalSend: send => noteAdapterPhysicalSend(continuationEstimate, send),
               onRecoveryWithheld: noteAdapterRecoveryWithheld,
@@ -290,7 +290,7 @@ export function createAdapterContinuations(
                 body: builtContinuationRequest.body,
               }, recovery),
               upstream.signal,
-              connectMs,
+              route.provider.authMode === "forward" ? connectMs : 0,
               nextParsed.stream,
               providerFetch(route.provider, options.codexWsRuntimeIdentity, {
                 observeTransport: transportObserver(logCtx),
@@ -728,6 +728,7 @@ export function createAdapterContinuations(
       // The shared signal is not aborted on timeout: this generator must still emit
       // the error that the already-live Responses bridge turns into a terminal.
       const parse = async function* (current: Response): AsyncGenerator<AdapterEvent> {
+        const bodyInactivityMs = resolveStallTimeoutMs(config.stallTimeoutSec, { localUpstream: isLocalUpstream(transportState.sameTargetRequest?.url ?? route.provider.baseUrl) });
         if (!current.ok) {
           yield await adapterExchange.thinkingSignatureRecovery.projectHttpFailure(current, upstream.signal);
         } else if (nextParsed.stream) {

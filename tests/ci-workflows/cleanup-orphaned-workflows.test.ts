@@ -52,7 +52,7 @@ describe("orphaned GitHub Actions cleanup", () => {
       permissions?: Record<string, string>;
       jobs?: Record<string, {
         "timeout-minutes"?: number;
-        steps?: Array<{ uses?: string; run?: string }>;
+        steps?: Array<{ uses?: string; run?: string; with?: Record<string, unknown> }>;
       }>;
     };
 
@@ -68,11 +68,11 @@ describe("orphaned GitHub Actions cleanup", () => {
       step.uses === "actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0"
     )).toBe(true);
     const bunSetup = steps.find(step => step.run?.includes("@oven/bun-linux-x64"));
-    expect(bunSetup?.run).toContain("@oven/bun-linux-x64/-/bun-linux-x64-1.4.0.tgz");
+    expect(bunSetup?.run).toContain("@oven/bun-linux-x64/-/bun-linux-x64-1.4.4.tgz");
     expect(bunSetup?.run).toContain(
-      "0eee38cde6ed3d726e8ef30b9ad231110eb290e858b7b2ff43e6081959be632f8f8ff7e93a7abad208302292a9fe918015b6073624eb0372538ee67d3136d922",
+      "0876db9261d5336f13d4616afba18be00a38ba3c306308f50b1145c041732da9cf7cdb0877d0216c83f4438ade5ae5819068a6524a10ca0acaed1823b63defa2",
     );
-    expect(bunSetup?.run).toContain("--version)\" = '1.4.0'");
+    expect(bunSetup?.run).toContain("--version)\" = '1.4.4'");
     expect(bunSetup?.run).toContain('printf \'%s\\n\' "$bun_stage/package/bin" >> "$GITHUB_PATH"');
     expect(steps.some(step => step.uses?.startsWith("oven-sh/setup-bun@"))).toBe(false);
     expect(steps.some(step =>

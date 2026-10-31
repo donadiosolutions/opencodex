@@ -1,6 +1,7 @@
 import { Buffer } from "node:buffer";
 import { gunzipSync, inflateRawSync, inflateSync, zstdDecompressSync } from "node:zlib";
 import type { TranslatorBudget } from "../lib/translator-budget";
+import { updateInboundBodyReservation } from "./inbound-body-budget";
 
 const bodyObservers = new WeakMap<Request, (body: unknown, rawBytes: number) => void>();
 /** Observation attaches to the original caller request, never a translated replay. */
@@ -334,12 +335,15 @@ export async function readBoundedJsonRequestBody(
     // Count UTF-8 without allocating another request-sized byte array for diagnostics.
     releaseText = budget?.observeAcceptedRequestCopy(Buffer.byteLength(text, "utf8"));
     if (options && "emptyBodyFallback" in options && text.trim() === "") {
+      updateInboundBodyReservation(req, Math.max(raw.byteLength, decoded.byteLength));
       return options.emptyBodyFallback;
     }
     const parsed = JSON.parse(text);
     try { bodyObservers.get(req)?.(parsed, raw.byteLength); } catch { /* optional diagnostics */ }
     // Keep the serialized-size contract: normalization can expand numeric literals.
-    budget?.observeAcceptedRequestCopy(Buffer.byteLength(JSON.stringify(parsed), "utf8"));
+    const parsedBytes = budget ? Buffer.byteLength(JSON.stringify(parsed), "utf8") : decoded.byteLength;
+    budget?.observeAcceptedRequestCopy(parsedBytes);
+    updateInboundBodyReservation(req, Math.max(raw.byteLength, decoded.byteLength, parsedBytes));
     return parsed;
   } finally {
     releaseText?.();
