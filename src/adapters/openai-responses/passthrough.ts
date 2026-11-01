@@ -394,7 +394,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
         // including default muse-spark-1.3. Do not reuse the contributor/Zen web_search
         // predicates. Namespace flattening has already produced the public wire names.
         if (isMetaAiResponsesDestination(url)) {
-          const rewritten = rewriteMuseToolNamesForUpstream(outBody);
+          const rewritten = rewriteMuseToolNamesForUpstream(outBody, incoming.providerName === "meta-muse");
           outBody = rewritten.body;
           convertedMuseToolNameAliases = rewritten.aliases;
         }

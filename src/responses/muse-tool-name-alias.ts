@@ -80,11 +80,12 @@ export function museWireToolName(originalName: string, used?: Set<string>): stri
  * collision domain first, then long or charset-unsafe names alias in that same order.
  * `aliases` is wireName -> originalName for identities that actually changed.
  */
-export function buildMuseToolNameAliasPlan(originalNames: readonly string[]): {
+export function buildMuseToolNameAliasPlan(originalNames: readonly string[], aliasUpdatePlan = false): {
   wireByOriginal: Map<string, string>;
   aliases: Map<string, string>;
 } {
-  const used = new Set<string>();
+  // Reserve the rejected identity so the existing collision-safe hash path aliases it.
+  const used = new Set<string>(aliasUpdatePlan ? ["update_plan"] : []);
   const wireByOriginal = new Map<string, string>();
   const unique: string[] = [];
   const seen = new Set<string>();
@@ -94,7 +95,7 @@ export function buildMuseToolNameAliasPlan(originalNames: readonly string[]): {
     unique.push(name);
   }
   for (const name of unique) {
-    if (!isPassThroughMuseToolName(name)) continue;
+    if (!isPassThroughMuseToolName(name) || (aliasUpdatePlan && name === "update_plan")) continue;
     used.add(name);
     wireByOriginal.set(name, name);
   }
@@ -258,14 +259,15 @@ function authorizedMuseAliases(
 
 /**
  * Rewrite function/custom tool identities for the Meta Muse 64-char wire limit.
+ * Muse Code can also alias update_plan, which its endpoint rejects by name.
  * Arguments, user text, and schema property names stay untouched.
  */
-export function rewriteMuseToolNamesForUpstream(body: unknown): {
+export function rewriteMuseToolNamesForUpstream(body: unknown, aliasUpdatePlan = false): {
   body: unknown;
   aliases: Map<string, string>;
 } {
   if (!isPlainObject(body)) return { body, aliases: new Map() };
-  const { wireByOriginal, aliases } = buildMuseToolNameAliasPlan(collectMuseToolNames(body));
+  const { wireByOriginal, aliases } = buildMuseToolNameAliasPlan(collectMuseToolNames(body), aliasUpdatePlan);
   if (aliases.size === 0) return { body, aliases };
 
   let tools = body.tools;

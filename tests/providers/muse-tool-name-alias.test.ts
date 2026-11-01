@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
+import { restoreMuseToolNamesInJson } from "../../src/responses/muse-tool-name-alias";
 import type { OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -77,6 +78,7 @@ function buildForProvider(
   provider: OcxProviderConfig,
   modelId: string,
   rawBody: Record<string, unknown>,
+  providerName?: string,
 ) {
   const request = createResponsesPassthroughAdapter(provider).buildRequest({
     modelId,
@@ -84,7 +86,7 @@ function buildForProvider(
     stream: false,
     options: {},
     _rawBody: { model: modelId, input: "ping", ...rawBody },
-  }, { headers: new Headers() });
+  }, { headers: new Headers(), providerName });
   return {
     body: JSON.parse(request.body) as Record<string, unknown>,
     aliases: request.convertedMuseToolNameAliases,
@@ -163,5 +165,96 @@ describe("#4410 Meta Muse 64-char tool-name aliasing", () => {
     expect(sent).toEqual(names);
     expect((body.tool_choice as { name: string }).name).toBe(LONG_ISSUE_NAMES[0]);
     expect(aliases).toBeUndefined();
+  });
+});
+
+
+describe("Muse Code update_plan wire alias", () => {
+  const original = "update_plan";
+  const wire = hashedName(original);
+  const args = '{"plan":[{"step":"update_plan","status":"completed"}]}';
+
+  test("aliases declarations and replay, preserving caller data and restoring JSON/SSE identities", () => {
+    const raw = {
+      tools: [functionTool(original), functionTool("write_stdin"), functionTool("update_planner")],
+      input: [
+        { type: "function_call", name: original, call_id: "plan_call", arguments: args },
+        { type: "function_call_output", call_id: "plan_call", output: "update_plan completed" },
+        { role: "user", content: "Use update_plan" },
+      ],
+      tool_choice: "auto",
+    };
+    const before = JSON.stringify(raw);
+    const { body, aliases } = buildForProvider(META_PROVIDER, "muse-wonder-full-1.0", raw, "meta-muse");
+    expect(JSON.stringify(raw)).toBe(before);
+    expect((body.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual([wire, "write_stdin", "update_planner"]);
+    expect(body.input).toEqual([
+      { type: "function_call", name: wire, call_id: "plan_call", arguments: args },
+      { type: "function_call_output", call_id: "plan_call", output: "update_plan completed" },
+      { role: "user", content: "Use update_plan" },
+    ]);
+    expect(aliases?.get(wire)).toBe(original);
+    const call = { type: "function_call", name: wire, call_id: "plan_call", arguments: args };
+    for (const payload of [
+      { output: [call] },
+      { type: "response.output_item.added", item: call },
+      { type: "response.output_item.done", item: call },
+      { type: "response.function_call_arguments.done", name: wire, arguments: args },
+      { type: "response.function_call_arguments.delta", name: wire, delta: args },
+      { type: "response.completed", response: { output: [call] } },
+    ]) {
+      const restored = restoreMuseToolNamesInJson(JSON.stringify(payload), aliases!);
+      expect(restored).not.toContain('"name":"' + wire + '"');
+      expect(restored).toContain('"name":"update_plan"');
+      expect(restored).toContain(JSON.stringify(args));
+    }
+  });
+
+  test("does not steal the identity of a declared alias-shaped tool", () => {
+    for (const names of [[original, wire], [wire, original]]) {
+      const { body, aliases } = buildForProvider(META_PROVIDER, "muse-spark-1.3", {
+        tools: names.map(functionTool),
+      }, "meta-muse");
+      const sent = (body.tools as Array<{ name: string }>).map(tool => tool.name);
+      expect(new Set(sent).size).toBe(2);
+      expect(sent).toContain(wire);
+      expect(sent).not.toContain(original);
+      expect(aliases?.has(wire)).toBe(false);
+      expect([...aliases!.values()]).toEqual([original]);
+    }
+  });
+
+  test("aliases the normalized functions namespace from current additional_tools", () => {
+    const { body, aliases } = buildForProvider(META_PROVIDER, "muse-spark-1.3", {
+      input: [{ type: "additional_tools", tools: [{ type: "namespace", name: "functions", tools: [functionTool(original)] }] }],
+    }, "meta-muse");
+    expect((body.tools as Array<{ name: string }>)[0]!.name).toBe(wire);
+    expect(aliases?.get(wire)).toBe(original);
+  });
+
+
+  test("aliases promoted tool-search declarations while preserving result data", () => {
+    const { body, aliases } = buildForProvider(META_PROVIDER, "muse-spark-1.3", {
+      input: [{ type: "tool_search_output", call_id: "search_plan", status: "completed", execution: "client",
+        tools: [{ type: "namespace", name: "functions", tools: [functionTool(original)] }] }],
+    }, "meta-muse");
+    expect((body.tools as Array<{ name: string }>)[0]!.name).toBe(wire);
+    const result = (body.input as Array<{ type: string; output: string }>)[0]!;
+    expect(result.type).toBe("function_call_output");
+    expect(JSON.parse(result.output).tools[0].name).toBe(original);
+    expect(aliases?.get(wire)).toBe(original);
+  });
+
+  test("leaves other providers and a repointed Muse provider unchanged", () => {
+    for (const [provider, name] of [
+      [META_PROVIDER, "meta-model"], [META_PROVIDER, "custom-meta"],
+      [XAI_PROVIDER, "xai"], [XAI_PROVIDER, "meta-muse"],
+    ] as const) {
+      const { body, aliases } = buildForProvider(provider, "muse-wonder-full-1.0", {
+        tools: [functionTool(original)],
+      }, name);
+      expect((body.tools as Array<{ name: string }>)[0]!.name).toBe(original);
+      expect(aliases?.size ?? 0).toBe(0);
+    }
   });
 });

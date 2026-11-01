@@ -267,6 +267,10 @@ namespace, custom-tool and long-name aliases retain the existing normalization a
 restoration. Current declarations keep their parameter schemas when search results repeat a tool.
 Historical custom calls retain their existing function-call representation without granting
 those old tools current authority. Nested function definitions become public declarations.
+For the `meta-muse` provider, `update_plan` is sent with a collision-safe wire alias because
+Meta can reject that literal tool name with `client_attestation_denied`. Returned calls and
+replayed history retain the original client identity. This alias does not apply to `meta-model`
+or other providers, and tool arguments and schemas are unchanged.
 Malformed or unrepresentable namespace catalogs return HTTP 400 before inference, including
 requests with string or omitted input, rather than being partially promoted.
 
