@@ -435,10 +435,11 @@ function mintContextPrincipal(kind: string, keyId: string, credential: string): 
     .digest("hex");
 }
 
-export type DataPlaneAdmission =
+export type DataPlaneAdmission = (
   | { kind: "configured"; keyId: string; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
   | { kind: "environment"; source: DataPlaneAdmissionSource; contextPrincipalId?: string }
-  | { kind: "loopback"; source: "loopback" };
+  | { kind: "loopback"; source: "loopback" }
+) & { readonly callerPolicy?: import("../types/admission-policy").CapturedAdmissionPolicy };
 
 /**
  * Which admission secret `token` is, or null when it is none of them.
@@ -1090,6 +1091,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   annotateEmptyToolOutputs: "editor",
   supportsServiceTier: "editor",
   modelSupportsServiceTier: "editor",
+  promoteAdditionalTools: "editor",
   preserveResponsesReasoningContent: "editor",
   preserveResponsesInputItemIds: "editor",
   preserveResponsesMessageMetadata: "editor",
@@ -1195,6 +1197,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   terminalContinuationGuard: "editor",
   openaiChatEofTolerance: "editor",
   foldDeveloperRoleToSystem: "editor",
+  singleLeadingSystemMessage: "editor",
   promptCacheKey: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",

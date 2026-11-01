@@ -3444,7 +3444,7 @@ describe("config.ts – sync writer timeout keying (#840 refinement)", () => {
       atomicWriteFile(destination, "secret");
       expect(hardenSpy).toHaveBeenCalledWith(
         expect.stringContaining(".tmp"),
-        { required: true, timeoutMemoKey: destination },
+        { required: true, timeoutMemoKey: destination, retryTimedOutOnce: true },
       );
     } finally {
       hardenSpy.mockRestore();

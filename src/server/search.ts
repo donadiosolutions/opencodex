@@ -1,5 +1,7 @@
 import { transportObserver, recordUpstreamResponse } from "./transaction-capture";
 import { diagnosticTarget } from "./responses/fetch-helpers";
+import { CodexInstallationIdUnavailableError } from "../codex/installation-id";
+import { isolateCodexPoolClientMetadata, mergeCodexSelectedHeaders } from "../codex/forward-transport-headers";
 /**
  * /v1/alpha/search relay.
  *
@@ -162,6 +164,7 @@ export async function handleSearch(
       ? `${upstream.providerName}-${accountNamespace}`
       : formatCodexProviderForLog(upstream.providerName, codexLogAccountId(upstream.authContext), config);
   } catch (err) {
+    if (err instanceof CodexInstallationIdUnavailableError) return formatErrorResponse(503, "server_busy", err.message);
     if (err instanceof CodexAccountCooldownError) {
       return cooldownErrorResponse(err, Date.now(), accountNamespace);
     }
@@ -197,23 +200,26 @@ export async function handleSearch(
     }
   }
 
-  const headers: Record<string, string> = { "content-type": "application/json" };
-  if (upstream.provider.headers) Object.assign(headers, upstream.provider.headers);
-  for (const [name, value] of upstream.headers) headers[name] = value;
+  const headers = mergeCodexSelectedHeaders(
+    { "content-type": "application/json", ...upstream.provider.headers }, upstream.headers,
+  );
   const url = `${upstream.provider.baseUrl}/alpha/search`;
   const timeoutMs = config.search?.timeoutMs ?? SEARCH_UPSTREAM_TIMEOUT_MS;
   const linkedSignal = signalWithTimeout(timeoutMs, req.signal);
   const sidecarExit = sidecarEnter("search");
   let upstreamResponse: Response | undefined;
   try {
-    transportObserver(logCtx)({ kind: "send", transport: "http", body: JSON.stringify(relayBody),
+    const outboundBody = JSON.stringify(isolateCodexPoolClientMetadata(
+      relayBody, upstream.authContext.kind === "pool" ? upstream.authContext.chatgptAccountId : undefined,
+    ));
+    transportObserver(logCtx)({ kind: "send", transport: "http", body: outboundBody,
       target: diagnosticTarget(url, { method: "POST" }) });
     observeRequestTransport(logCtx, "http");
     upstream.beforeDispatch?.();
     upstreamResponse = await fetch(url, {
       method: "POST",
       headers,
-      body: JSON.stringify(relayBody),
+      body: outboundBody,
       signal: linkedSignal.signal,
       // Credential-bearing: do not follow a cross-origin 3xx. Bun strips `Authorization`
       // across origins but forwards nonstandard headers such as `chatgpt-account-id`,
@@ -239,6 +245,10 @@ export async function handleSearch(
     if (contentType) relayHeaders["content-type"] = contentType;
     return new Response(observed.bytes, { status: upstreamResponse.status, headers: relayHeaders });
   } catch (err) {
+    if (err instanceof CodexInstallationIdUnavailableError) {
+      upstream.releaseProbeLease?.();
+      return formatErrorResponse(503, "server_busy", err.message);
+    }
     if (req.signal.aborted) {
       return formatErrorResponse(499, "client_closed_request", "search request canceled by client");
     }

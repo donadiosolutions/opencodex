@@ -18,7 +18,6 @@ Catalog HTTP acquisition follows the [proxy-routing contract](catalog.md#remote-
 Concurrent refreshes triggered by independent agent work share the [credential refresh-lock contract](catalog.md#accounts-namespaces-and-pool-rotation); unknown lock identity remains available for stale recovery rather than immediate removal, and a failed path probe cannot mask the callback outcome. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
 
 CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](runtime.md#lifecycle).
-
 ## Plaintext V2 agent messages
 
 `src/responses/plaintext-v2-agent-messages.ts` owns the experimental, configuration-only
@@ -59,15 +58,12 @@ Shared parsing and streaming follow the [request-copy](transports/byte-accountin
 Pool credentials used by subagent routes can be
 [linked to Orca-managed homes](codex-home.md#orca-source-owned-account-import). The account-store
 resolver enforces source identity and expiry before those credentials reach routing.
-
 ## Multi-agent surface mode (3-state)
 
 See [surface selection and capacity](subagent-capacity.md#multi-agent-surface-mode-3-state) for the mode, global flag and hybrid configuration contract.
-
 ### Concurrent child limit
 
 See [concurrent child limit](subagent-capacity.md#concurrent-child-limit) for GUI/API units and canonical Codex setting ownership.
-
 ### What the five-model `spawn_agent` window is, and how V1 differs from V2
 
 `MAX_SPAWN_AGENT_MODEL_OVERRIDES = 5` (mirrored in `src/codex/catalog/subagent-roster.ts`) is **not** a
@@ -142,7 +138,6 @@ vision on 2026-09-19 (probed on that gateway); its sibling `deepseek-v4-flash` s
 and the Zen tiers keep their classification because they could not be measured.
 
 Full derivation with per-line citations: `devlog/_plan/260816_codexrs_multiagent_v2_and_history_perf/013_five_cap_v1_vs_v2.md`.
-
 ## Multipart encrypted task recovery
 
 `src/server/responses/agent-task-recovery.ts` admits at most 32 consecutive, individually complete
@@ -172,7 +167,6 @@ cannot enter the plaintext cache as an object.
 unreadable split-token shapes. The sanitizer preserves just those fragment objects and continues
 normalizing independent plaintext slots. Detection never authorizes reconstruction or recovery;
 other fragment layouts and mixed readable content retain their documented residual boundaries.
-
 ## Routed agent-message ciphertext egress
 
 Two questions about an `agent_message` were asked in two places, and the gap between them was
@@ -233,7 +227,6 @@ child with a marker where its assignment should be. An `agent_message` carrying 
 no ciphertext still reaches the wire unchanged and still draws the destination's own 422, which is
 a compatibility gap rather than an egress one. Covered by
 `tests/server/v2-agent-message-failfast.test.ts`.
-
 ## Subagents
 
 New non-OAuth provider registrations carry `initialModelSelection` with a unique
@@ -261,7 +254,6 @@ dashboard offers bare native and routed choices; exact account-qualified choices
 through `ocx agent subagents set` or the opencodex configuration. Retired native rows are
 excluded by the [shared catalog](catalog.md#shared-catalog); saved user choices are not rewritten
 by that retirement. Quota fallback retains independent shared/Reserve evidence.
-
 ### Native source priority
 
 `src/codex/catalog/native-priority.ts` owns native priority provenance for the builder and merge.
@@ -304,7 +296,6 @@ Quota-aware fallback walks a configured chain when the featured model is exhaust
 availability on a bounded interval (default 60 s, `src/codex/subagent-model-fallback.ts`). It rewrites
 the requested model id only; effort remains owned by the caps described under
 [Ultra reasoning level](catalog.md#ultra-reasoning-level).
-
 ### Per-role model pins
 
 Codex overrides a child's spawn-time model with the root `model` key of
@@ -347,7 +338,6 @@ catalog path calls it, and opencodex never creates, repairs, or removes a role f
   and stands even when the mirror is skipped.
 
 Sibling instances refuse the write, because it reaches the shared `CODEX_HOME`.
-
 ### Role model auto-assign
 
 `POST /api/codex-agent-roles/auto-assign` (dashboard Auto-assign, `ocx agent roles suggest`) proposes a
@@ -363,26 +353,33 @@ the same refusal as the PUT. Applying a proposal is the ordinary
   is not sent. The call goes through the proxy's own `/v1/chat/completions` via
   `postLocalChatCompletion` (`src/lib/local-chat-completion.ts`, shared with the routed vision describer), on
   the root `model` of Codex `config.toml` unless the caller names one. An answer that is not the strict JSON
-  shape, a missing role, or a field outside the vocabulary leaves that role **unsized** with the reason;
-  nothing is guessed. Keys beyond the five answer fields are ignored, and all five stay required. The
+  shape, a missing role, or a tier or effort outside the vocabulary leaves that role **unsized** with the reason;
+  a missing or unknown domain defaults to general. Keys beyond the six answer fields are ignored; the other five stay required. The
   sizing model never names a model.
-- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from
-  `subagentSelectableModels` (the same list the role picker renders) and tiers them: `codexRoleTiers` in the
-  opencodex config first, then price rank (input plus output per 1M tokens). Three or more priced models
-  split evenly across the three tiers. Fewer are anchored at the top, the dearest frontier and each cheaper
-  one a tier lower, so one is frontier and two are standard and frontier; fast is the tier left empty,
-  which keeps a standard role on the cheaper model. Unpriced, unmapped models are never proposed. A role
-  gets the lowest sufficient tier, then the lowest price, then the model it already uses when that model is
-  in the tie, then picker order. Effort binds to ladder positions of the chosen
-  model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is proposed
-  for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or
-  replace `model_reasoning_effort` through the same span-preserving editor as `model`, located by
-  the same TOML-aware scan. An empty ladder gives `proposedEffort: null`, meaning no proposal;
-  Apply omits `effort` and preserves the existing pin. A null proposal never means a null PUT. A routed
-  model's ladder is its row's
-  `reasoningEfforts`; a row that declares none takes the ladder the written Codex catalog shows for it, an
-  explicit empty list stays empty, and a row without its own default takes the catalog's default when that
-  rung is on the ladder.
+- **Mapping is deterministic code.** `src/codex/role-auto-assign.ts` draws candidates from `subagentSelectableModels` (the
+  same list the role picker renders) and tiers them: `codexRoleTiers` in the opencodex config first, then measured score in
+  the role's task domain, then price rank (input plus output per 1M tokens). The sizing answer carries a neutral `domain`
+  (coding, agentic, reasoning, writing, knowledge, general; missing means general), and `src/codex/role-capability.ts` reads
+  that domain's scores from Artificial Analysis once per UTC day when `codexRoleCapability.artificialAnalysis.apiKey`
+  resolves; the source refuses redirects and keeps a 30-second timeout and a 16 MiB body bound. With no key or on failure it
+  keeps configured tiers and price signals, reports the reason through `capability.error`, and returns null source
+  attribution. The `capability` block attributes the source; Artificial Analysis terms forbid redistribution, so its scores
+  are dropped from that block. Mapped models keep their mapped tier either way. With two or more measured unmapped
+  candidates, those are tiered by distinct score values (equal scores share a tier) without requiring prices, and unmeasured
+  unmapped ones are not proposed; otherwise price rank decides. `capability.error` is set only when no key is configured or
+  the source cannot be read; a source that answered but matched fewer than two candidates leaves it null, and a
+  proposal picked by price rank carries `tierSource: "price"`. Three or more priced models split evenly across the three
+  tiers. Fewer are anchored at the top, the dearest frontier and each cheaper one a tier lower, so one is frontier and two
+  are standard and frontier; fast is the tier left empty, which keeps a standard role on the cheaper model. Price tiering
+  excludes unpriced, unmapped models. A role gets the lowest sufficient tier, then the lowest price, then the higher
+  measured score, then the model it already uses when that model is in the tie, then picker order. Effort binds to ladder
+  positions of the chosen model (floor, default or middle, the rung above, ceiling), collapsing inside the range; it is
+  proposed for every sized role whose chosen model has a non-empty ladder. Apply and `--apply` insert or replace
+  `model_reasoning_effort` through the same span-preserving editor as `model`, located by the same TOML-aware scan. An empty
+  ladder gives `proposedEffort: null`, meaning no proposal; Apply omits `effort` and preserves the existing pin. A null
+  proposal never means a null PUT. A routed model's ladder is its row's `reasoningEfforts`; a row that declares none takes
+  the ladder the written Codex catalog shows for it, an explicit empty list stays empty, and a row without its own default
+  takes the catalog's default when that rung is on the ladder.
 
 The sizing call is injectable (`completeCodexRoleSizing` on the management deps), so route tests answer it
 without a provider. Sibling instances refuse the preview too: it sits under the refused
@@ -476,6 +473,15 @@ and upgrades do not migrate stored hints. The writer retains its native capabili
 and stores only `features.multi_agent_v2.multi_agent_mode_hint_text` in Codex TOML;
 `null` removes that key. The hint affects new native Codex sessions when their v2 surface
 is active, without changing reasoning effort or the proxy guidance switch.
+
+The integrations toggle `PUT /api/native-integrations/claude` reconciles the generated `ocx-*` definitions
+through `syncClaudeAgentDefsBestEffort` after it persists Off, so the marker-owned regular files are
+pruned at once without model discovery (On keeps the launch and startup sync); a repeated Off reconciles again to remove
+definitions an older version left behind (#7968). The reconcile is best effort: an unlink failure
+leaves that file and the toggle still succeeds. A save that fails before publishing restores the in-memory block, so a
+retry on the same config is a real transition; one that published first keeps the new value. User-authored and symlinked `ocx-*` files are never
+touched, and a live sibling instance still owns the directory. Coverage:
+`tests/claude-integration/claude-first-party-agent-sync.test.ts`.
 
 Claude Code `ocx-*` agent definitions consume the same effective `claudeCode.blockedSkills` policy
 as inbound bundle elision. When the list is non-empty (default: `claude-api`), generated definitions

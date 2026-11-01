@@ -1,3 +1,4 @@
+import { CodexInstallationIdUnavailableError } from "../../codex/installation-id";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
 import type { ResponsesTransport } from "./request-transport";
@@ -107,7 +108,8 @@ export async function prepareResponsesSidecarAuth(
           // Sidecars are optional helpers for an otherwise independent routed turn.
           // An unavailable/cooling/expired credential disables only this helper.
           if (
-            err instanceof CodexPoolAuthenticationError
+            err instanceof CodexInstallationIdUnavailableError
+            || err instanceof CodexPoolAuthenticationError
             || err instanceof CodexAuthContextError
             || err instanceof CodexAccountCooldownError
             || err instanceof CodexThreadAffinityExpiredError
@@ -135,6 +137,7 @@ export async function prepareResponsesSidecarAuth(
     ? undefined
     : planVisionSidecar(config, route.provider, route.modelId, parsed, openAiVisionSidecar, {
       admission: options.admission, codexAuthPolicy: options.codexAuthPolicy, providerName: route.providerName,
+      advisorAdmissionPolicy: options.advisorAdmissionPolicy,
     });
   const recordSidecarOutcome = openAiVisionSidecar?.recordOutcome;
   if (visionPlan) {

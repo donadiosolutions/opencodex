@@ -378,6 +378,8 @@ export interface PersistedUsageEntry {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** A persisted attempt roster lost at least one malformed entry during normalization. */
+  attemptNormalizationDropped?: boolean;
   /** Aggregated upstream spend for this logical request; additive, older rows omit it. */
   spend?: PersistedRequestSpend;
   /** Provenance of this row's cache detail; absent rows are reconstructed, never assumed observed. */
@@ -571,6 +573,10 @@ export function usageTotalTokens(usage: OcxUsage | undefined): number | undefine
  * Providers whose adapters can only estimate usage (no authoritative per-turn frame).
  * Callers should pass the route ADAPTER when available; the name-prefix match is a
  * fallback for paths that only know the configured provider name (e.g. "cursor-mykey").
+ *
+ * Kiro is on the list because most of what reaches the log is a guess: a figure taken off the
+ * bridged Responses wire derives its input from the context checkpoint. The adapter opts a
+ * measured figure out with `upstreamReported`, set where it reads Kiro's own tokenUsage frame.
  */
 function isEstimatedUsageProvider(providerOrAdapter: string): boolean {
   return providerOrAdapter === "kiro" || providerOrAdapter.startsWith("kiro-")
@@ -591,7 +597,9 @@ export function usageForFinalLog(
 ): OcxUsage | undefined {
   if (!usage) return undefined;
   if (locallyAnswered) return usage;
-  if (usage.estimated || isEstimatedUsageProvider(provider)) return { ...usage, estimated: true };
+  if (usage.estimated || (isEstimatedUsageProvider(provider) && !usage.upstreamReported)) {
+    return { ...usage, estimated: true };
+  }
   return usage;
 }
 
@@ -931,6 +939,8 @@ export function normalizeUsageAttempts(raw: unknown): PersistedUsageAttempt[] {
     .filter((attempt): attempt is PersistedUsageAttempt => attempt !== null);
 }
 
+export { normalizeUsageAttempts as normalizedAttempts };
+
 const MAX_METADATA_STRING_LEN = 64;
 function capMetadataString(s: string): string {
   return s.length > MAX_METADATA_STRING_LEN ? s.slice(0, MAX_METADATA_STRING_LEN) : s;
@@ -1050,7 +1060,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const jevDecision = normalizePersistedJevDecision(entry.jevDecision);
   const spend = normalizeRequestSpend(entry.spend);
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
-  return {
+  const normalized: PersistedUsageEntry = {
     requestId: entry.requestId,
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
@@ -1132,6 +1142,9 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(entry.usage ? { usage: normalizeUsageValue(entry.usage) } : {}),
     ...(typeof entry.totalTokens === "number" ? { totalTokens: entry.totalTokens } : {}),
     ...(Array.isArray(entry.attempts) ? { attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      && Object.prototype.propertyIsEnumerable.call(entry, "attemptNormalizationDropped")
+      ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
       ? { cacheProvenance: entry.cacheProvenance }
@@ -1155,6 +1168,12 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
     ...(protocolTrace ? { protocolTrace } : {}),
     ...normalizeRequestFailureAttribution(entry),
   };
+  if (normalized.attemptNormalizationDropped !== true && (entry.attemptNormalizationDropped === true
+    || (Array.isArray(entry.attempts) && attempts.length < entry.attempts.length))) {
+    // Preserve the read-time loss signal without changing legacy ledger serialization.
+    Object.defineProperty(normalized, "attemptNormalizationDropped", { value: true, enumerable: false });
+  }
+  return normalized;
 }
 
 // Bound hot-path filesystem hardening to once per second while ensuring an external mode
@@ -1205,7 +1224,10 @@ export function setUsageLedgerAppendHook(hook: (() => void) | null): void {
 export function appendUsageEntry(entry: PersistedUsageEntry): void {
   const normalized = normalizeUsageEntry(entry);
   if (normalized.diagnostics) clearDiagnosticPersistenceOutcome(normalized.diagnostics);
-  const line = `${JSON.stringify(normalized)}\n`;
+  // Once invalid attempts are removed, persist their loss so future reads can still report it.
+  const line = `${JSON.stringify(normalized.attemptNormalizationDropped === true
+    ? { ...normalized, attemptNormalizationDropped: true }
+    : normalized)}\n`;
   const path = usageLogPath();
   const now = Date.now();
   const doAppend = (): void => {

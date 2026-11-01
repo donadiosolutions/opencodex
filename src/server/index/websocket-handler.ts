@@ -3,6 +3,7 @@ import { NativeInjectionChannel } from "../responses/native-injection";
 import { NativeSteeringChannel, NativeSteeringError } from "../responses/native-steering";
 import { createNativeSteeringLogObserver } from "../responses/native-steering-log";
 import { reasoningArchiveErrorResponse } from "../responses/reasoning-archive-error";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
 import type { Server, ServerWebSocket } from "bun";
 import {
   LIVE_SIDEBAND_UPSTREAM_OPEN_TIMEOUT_MS,
@@ -186,7 +187,7 @@ export function createWebsocketHandler(
             return;
           }
           try {
-            sendUpstreamFrame(upstream, raw);
+            sendUpstreamFrame(upstream, raw, ws.data.authContext);
             if (ws.data.liveMaxSessionMs !== undefined && upstream.bufferedAmount > MAX_WS_FRAME_BYTES) {
               closeLiveSideband(ws, 1013, "audio upstream backpressure");
             }
@@ -313,6 +314,7 @@ export function createWebsocketHandler(
         }
 
         // Only a genuinely admitted turn may receive steering or continuations.
+        const advisorAdmissionPolicy = captureAdmissionPolicy(config, ws.data.admission);
         const finishActivity = ws.data.responsesActivity?.beginTurn(frame.input);
         ws.data.nativeControl = nativeControl;
         const payload: Record<string, unknown> = { ...frame };
@@ -361,6 +363,7 @@ export function createWebsocketHandler(
           try {
             let terminalRecorder: ((status: ResponsesTerminalStatus, httpStatusOverride?: number) => void) | undefined;
             const response = await handleResponses(req, config, logCtx, {
+              advisorAdmissionPolicy,
               ...(wsAdmission ? { admission: wsAdmission } : {}),
               agentTaskRecoveryApiKeyHeaderPresent: ws.data.agentTaskRecoveryApiKeyHeaderPresent,
               forceEmptyResponseId: true,

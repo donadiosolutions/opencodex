@@ -1,14 +1,11 @@
 # Responses Wire Shapes
-
 ## Client rate-limit retry advice
 
 With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes `resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`. `src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest lower bound first; competing original hints are retained under an explicit provider-detail label. Other explicit verdicts, proxy replay budgets and event ordering are unchanged. Signed Anthropic progress follows the [progress-update contract](../providers/anthropic-progress.md). This creates no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
-
 ## Adapter incomplete reasons
 
 `src/bridge/sse.ts`, `src/bridge/response-json.ts`, and `src/protocols/encoders/adapter-events.ts` normalize explicit incomplete reasons with `truncationReasonFor(reason) ?? reason`: known output-limit aliases become `max_output_tokens`, and refusal/filter aliases become `content_filter`. `src/responses/incomplete-reason.ts` applies the same classifier to native Responses JSON and SSE delivery in `src/server/responses/passthrough-delivery.ts` and to WebSocket frames in `src/server/responses/codex-ws-wire.ts`, including native control chains. It copies only changed `incomplete_details.reason` metadata, leaving output content and all other response fields intact. The compaction parser in `src/adapters/openai-responses/passthrough.ts` also normalizes its internal incomplete event. `tests/responses/incomplete-reason-normalization.test.ts` covers native HTTP delivery, WS terminal normalization and both adapter parser formats. `tool_call_end.incomplete` preserves unfinished function/custom items without argument-done frames in SSE, buffered JSON and direct encoders; it does not itself terminate the turn or complete those arguments.
 Unknown reasons remain verbatim, including `adapter_eof`, `max_messages`, and `steered`; message, retryability, usage, and incomplete status are preserved. `tests/adapters/bridge-nonstreaming-terminal.test.ts` covers both Responses projections and real passthrough parsing; the direct Chat and Messages parity suites cover the client-wire outcomes. The Chat writer does not depend on that upstream pass alone: `chatCompletionsIncompleteOutcome` in `src/chat/outbound.ts` classifies through the same `truncationReasonFor` table for the SSE converter (and the collector that folds it), the direct encoder in `src/protocols/encoders/chat.ts` and `responsesJsonToChatCompletion`, so a raw alias such as Volcengine Ark's `length` still ends with `finish_reason: "length"` (or `content_filter`). Reasons outside the table, including `adapter_eof`, `upstream_stall_timeout`, `missing_terminal_event`, `max_messages` and `steered`, remain Chat errors. `tests/responses/chat-incomplete-length-reason.test.ts` covers the converter outcomes and the handler's streamed and buffered wire.
-
 ## Compaction image input
 
 For translated routed compaction, `src/responses/compaction-images.ts` replaces earlier user and
@@ -20,7 +17,6 @@ vision planning. The projection does not rewrite `_rawBody` or stored history; l
 may rewrite the request-local raw body for transport safety. Normal generation and native compaction
 stay unchanged. Both routed v1 and v2 pass through this boundary; raw Responses gateways retain their existing text-only compaction conversion.
 The [decoded checkpoint continuation contract](responses.md#decoded-checkpoint-continuation) governs the conditional system note and its authorization limits.
-
 ## Direct MCP calls in code mode
 
 On routed bridge or converted-custom passthrough paths, when the request declares a
@@ -39,7 +35,6 @@ Per-wire request and stream shapes on the Responses data plane: mixed-wire model
 agent-message continuation, declared-tool membership by inbound wire, and passthrough SSE stream
 shapes. The endpoint, dispatch, and credential rules they build on are in
 [Responses transport](responses.md).
-
 ## Mixed-wire provider defaults
 
 Registry `modelWireDefaults` select an evidence-backed upstream protocol for an exact model without
@@ -65,7 +60,7 @@ Google metadata follows the [destination-scoped replay projection](../providers/
 
 xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this
-default. API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
+default. Exact xAI Responses destinations, including the US regional API, omit only `output.encrypted_content` from `include`; other entries remain unchanged. Meta at the exact `api.meta.ai` host shares this normalization, as do Azure adapters and resource hosts under .openai.azure.com, including when configured with openai-responses; unrelated destinations retain their include list ([request compatibility](../providers/xai-grok.md#responses-request-compatibility)). API-key requests, translated Chat/Anthropic defaults and other Grok models retain their
 existing wire and tier policy. The OAuth lane is service-tier classified per model
 (`modelSupportsServiceTier` on the registry entry, live-probed 2026-09-13 and 2026-09-23;
 `devlog/_fin/260923_grok47_parity/010_probe-evidence.md` records 4.7): grok-4.7, grok-4.6, grok-4.5,
@@ -157,13 +152,13 @@ policy.
 Explicitly selected Codex Lite ordinary unreferenced hosted-history lowering follows [the hosted-search continuation boundary](../providers-and-adapters.md#hosted-search-continuation-binding); non-Lite/unknown requests, native compact and public API retain structural history; portable compaction keeps its existing trigger and default projection. Go's non-forward Responses request path moves valid `additional_tools` wrappers into top-level
 `tools` through `src/adapters/opencode-go-additional-tools.ts`. Placement runs after existing
 custom/search/namespace lowering and before code-mode, compaction and final hosted-tool pruning.
-It does not recalculate wire identities or response aliases. The matcher reads the constructed
+It reads per-item replay provenance without recalculating wire identities or response aliases. The matcher reads the constructed
 send URL, resolving it with URL semantics, and requires HTTPS `opencode.ai`, the standard port
 and exact `/zen/go/v1/responses`. Normal and endpoint-inclusive bases or split `responsesPath`
 configurations agree; a custom path resolving to Zen or elsewhere does not acquire Go placement.
 Credentials, query, fragment, foreign hosts and other resource paths are excluded. The existing
 URL constructor canonicalizes trailing base slashes before this check. Malformed wrappers remain unchanged and
-the shared mixed-ciphertext agent-message gate remains fail-closed.
+the shared mixed-ciphertext agent-message gate remains fail-closed. Responses passthrough clones and tags historical and current input items before any rewrite, including identity repair; symbol provenance survives message replacement, prompt-cache cleanup, filtering and tool lowering without entering serialized requests. Promotion uses provenance rather than positions in shortened input. Discovery-source filtering follows the [current-turn catalog contract](responses.md#responses-httpsse) before nested tool definitions enter a live catalog.
 
 The canonical `opencode-go` registry entry defaults to `statelessResponses: true` because Go
 rejects reasoning ciphertext combined with `previous_response_id` (#3838). Existing derive
@@ -221,7 +216,7 @@ the destination is the whole predicate, because Meta's refusal is a gateway sche
 Muse model it serves, its default `muse-spark-1.3` is not a Contributor id, and a missing model id
 still strips. Because the predicate is the host, a custom provider pointed at that exact URL gets the
 same strip.
-
+Meta's `api.meta.ai` route uses `src/adapters/openai-responses/muse-tool-catalog.ts` to capture current declarations before history rewrites or deduplication: current wrappers become `tools`, declarations retain their schemas over search discoveries, historical discovery stays replay data, and historical custom calls retain their conversion without live authority. Historical catalogs are not validated as current declarations; once input items carry replay provenance tags, the tags decide membership instead of the numeric prefix, so an earlier rewrite that shortened the input (Zed lifting a replayed wrapper) cannot shift the boundary. The reserved `functions` group and nested function definitions become public function declarations. Catalog validation also covers string/omitted input; unrepresentable namespace children and malformed current catalogs fail locally with HTTP 400 (`tests/responses/responses-muse-tool-choice.test.ts`).
 Direct Meta Muse / Meta Model Responses (`https://api.meta.ai/v1`) also rejects function tool
 names longer than 64 characters or containing characters outside `[a-zA-Z0-9_-]`. After namespace
 flattening, `src/responses/muse-tool-name-alias.ts` rewrites those identities on the `api.meta.ai`

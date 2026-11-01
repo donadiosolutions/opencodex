@@ -19,6 +19,7 @@ import {
 } from "../lib/errors";
 import { CODEX_CONFIG_PATH, readRootTomlString } from "../codex/paths";
 import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
+import type { CodexAuthContext } from "../codex/auth-context";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
 import { captureSafely, diagnosticFinalizedClock, finalizeDiagnostics, finishAttemptDiagnostics, recordContextEstimate, recordContextTransformation, recordProtocolEvent, recordPersistenceOutcome } from "./transaction-capture";
@@ -377,6 +378,8 @@ export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   usage?: OcxUsage;
   totalTokens?: number;
   attempts?: PersistedUsageAttempt[];
+  /** True when persistence normalization drops any attempt. */
+  attemptNormalizationDropped?: boolean;
   /**
    * Upstream spend for the whole logical request: sends aggregated across attempts and combo
    * children, split into settled and unresolved, with the budget state and move reasons that
@@ -551,6 +554,8 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     ...(entry.usage ? { usage: entry.usage } : {}),
     ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
     ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
+    ...(entry.attemptNormalizationDropped === true
+      ? { attemptNormalizationDropped: true } : {}),
     ...(spend ? { spend } : {}),
     ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
       ? { cacheProvenance: entry.cacheProvenance }
@@ -670,6 +675,7 @@ export function addRequestLog(entry: RequestLogEntry) {
     diagnostics = undefined;
   }
   const retained: RequestLogEntry = { ...entry };
+  if (entry.attemptNormalizationDropped === true) retained.attemptNormalizationDropped = true;
   if (claudeCompatibility) retained.claudeCompatibility = claudeCompatibility;
   else delete retained.claudeCompatibility;
   if (jevDecision) retained.jevDecision = jevDecision;
@@ -679,6 +685,9 @@ export function addRequestLog(entry: RequestLogEntry) {
       // The finalized ring row owns a snapshot, not handles still writable by
       // late transport callbacks after usage.jsonl has already been appended.
       retained.attempts = normalizeUsageAttempts(entry.attempts);
+      if (Array.isArray(entry.attempts) && retained.attempts.length < entry.attempts.length) {
+        retained.attemptNormalizationDropped = true;
+      }
     } catch {
       delete retained.attempts;
     }
@@ -768,6 +777,8 @@ export function addRequestLog(entry: RequestLogEntry) {
       ...(entry.totalTokens !== undefined ? { totalTokens: entry.totalTokens } : {}),
       ...(entry.attempts !== undefined ? { attempts: entry.attempts } : {}),
       ...terminalMetadata,
+      ...(entry.attemptNormalizationDropped === true
+        ? { attemptNormalizationDropped: true } : {}),
       ...(entry.spend ? { spend: entry.spend } : {}),
       ...(isKnownCacheTelemetryProvenance(entry.cacheProvenance)
         ? { cacheProvenance: entry.cacheProvenance }
@@ -1375,6 +1386,18 @@ export function noteAffinityMove(
 }
 
 /**
+ * Copy the selection's own affinity decision onto the request log. Both Pool-served kinds carry
+ * one: a stored Pool account and the main login rotating as `main-pool` (#4546, #7799). A move
+ * then reads as an event with its cause instead of something inferred from account labels.
+ */
+export function noteCodexSelectionAffinity(logCtx: RequestLogContext, authCtx: CodexAuthContext): void {
+  const decision = authCtx.kind === "pool" || authCtx.kind === "main-pool" ? authCtx.affinityDecision : undefined;
+  if (!decision) return;
+  logCtx.affinity = decision.move;
+  logCtx.affinityReason = decision.reason;
+}
+
+/**
  * The affinity scope a released binding belonged to: one thread, one model lane.
  *
  * Both halves are part of the key. A thread holds a separate binding per model lane, so a
@@ -1747,7 +1770,10 @@ function finalizedUsage(
   const usageFallback = !finalUsage && estimate !== undefined
     ? { inputTokens: estimate, outputTokens: 0, estimated: true }
     : undefined;
-  const combinedInputTokens = finalUsage && estimate !== undefined
+  // The estimate is a floor under a count the adapter could only guess. A count the adapter read
+  // off the upstream's own usage frame stays exact: max() against a larger local estimate would
+  // replace it and mark it estimated.
+  const combinedInputTokens = finalUsage && !finalUsage.upstreamReported && estimate !== undefined
     ? Math.max(finalUsage.inputTokens, estimate)
     : undefined;
   const loggedUsage = finalUsage && combinedInputTokens !== undefined
@@ -2059,6 +2085,7 @@ export function aggregateAttemptUsage(
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
     ...(providerCredits !== undefined ? { providerCredits } : {}),
     ...(status === "estimated" ? { estimated: true } : {}),
+    ...(usages.every(usage => usage.upstreamReported) ? { upstreamReported: true as const } : {}),
   };
   return { usage: aggregate, status, totalTokens };
 }

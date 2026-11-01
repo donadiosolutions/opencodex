@@ -15,6 +15,7 @@ import { executeComboResponses } from "./core-combo";
 import { captureResponsesIngressCredentialOwnership } from "./core-auth";
 import { registerTurn, unregisterTurn } from "../lifecycle";
 import { runWithCompactionRecovery } from "./compaction-recovery";
+import { captureAdmissionPolicy } from "../capture-admission-policy";
 /**
  * Route one `/v1/responses` request through the adapter pipeline: recovery loop, passthrough
  * wire, image/web-search bridges, and the terminal-guard continuation.
@@ -38,6 +39,7 @@ export async function handleResponses(
     const response = await runWithCompactionRecovery(req, config, logCtx, {
       ...options, abortSignal,
       ...credentialOwnership,
+      advisorAdmissionPolicy: options.advisorAdmissionPolicy ?? captureAdmissionPolicy(config, options.admission, options.admissionScope),
       openAiSidecarAuth: options.openAiSidecarAuth === undefined
         ? captureExplicitOpenAiCallerAuth(req.headers, config) : options.openAiSidecarAuth,
       nativeCallerAuth: options.nativeCallerAuth === undefined

@@ -2,6 +2,7 @@ import type { CodexModelEntitlementSnapshot } from "../codex/model-entitlements"
 import { applyAccountModelMetadata } from "../codex/catalog/account-model-metadata";
 import { applyNativeAccessPrograms, applyNativeUltraFastTier } from "../codex/catalog/access-programs";
 import { websocketsEnabled } from "../config";
+import { omitDisabledNativeCatalogEntries } from "../codex/catalog/native-omission";
 import type { OcxConfig } from "../types";
 import { buildCatalogEntries } from "../codex/catalog/build-entries";
 import { loadCatalogTemplate } from "../codex/catalog/bundled";
@@ -53,5 +54,5 @@ export function buildCodexModelList({
     applyNativeAccessPrograms(entries, modelEntitlements, accountTargets);
     applyNativeUltraFastTier(entries, modelEntitlements, accountTargets, config.ultraFastTier === true, bareEligibleAccountIds);
   }
-  return { models: applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)) };
+  return { models: omitDisabledNativeCatalogEntries(applyNativeVisibility(entries, disabledModels, accountSelectors.length > 0, new Set(accountNativeSlugs)), config) };
 }
