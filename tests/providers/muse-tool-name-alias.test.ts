@@ -169,7 +169,7 @@ describe("#4410 Meta Muse 64-char tool-name aliasing", () => {
 });
 
 
-describe("Muse Code update_plan wire alias", () => {
+describe("Muse Code client-tool wire aliases", () => {
   const original = "update_plan";
   const wire = hashedName(original);
   const args = '{"plan":[{"step":"update_plan","status":"completed"}]}';
@@ -207,6 +207,24 @@ describe("Muse Code update_plan wire alias", () => {
       expect(restored).not.toContain('"name":"' + wire + '"');
       expect(restored).toContain('"name":"update_plan"');
       expect(restored).toContain(JSON.stringify(args));
+    }
+  });
+
+  test("aliases each confirmed rejected Muse Code identity and restores returned calls", () => {
+    for (const name of ["update_plan", "request_user_input", "get_goal", "create_goal", "update_goal"]) {
+      const { body, aliases } = buildForProvider(META_PROVIDER, "muse-wonder-full-1.0", {
+        tools: [functionTool(name), functionTool("request_user_input_async")],
+      }, "meta-muse");
+      const wireName = hashedName(name);
+      expect((body.tools as Array<{ name: string }>).map(tool => tool.name)).toEqual([wireName, "request_user_input_async"]);
+      expect(aliases?.get(wireName)).toBe(name);
+      expect(JSON.parse(restoreMuseToolNamesInJson(JSON.stringify({ output: [
+        { type: "function_call", name: wireName, call_id: "confirmed", arguments: "{}" },
+      ] }), aliases!)).output[0].name).toBe(name);
+      const other = buildForProvider(META_PROVIDER, "muse-wonder-full-1.0", {
+        tools: [functionTool(name)],
+      }, "meta-model");
+      expect((other.body.tools as Array<{ name: string }>)[0]!.name).toBe(name);
     }
   });
 

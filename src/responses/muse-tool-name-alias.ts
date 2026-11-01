@@ -4,6 +4,9 @@ const MUSE_TOOL_NAME_MAX = 64;
 const MUSE_TOOL_NAME_PREFIX = 55;
 const MUSE_TOOL_NAME_HASH_LEN = 8;
 const MUSE_SAFE_NAME = /^[a-zA-Z0-9_-]+$/;
+const MUSE_CODE_REJECTED_TOOL_NAMES = new Set([
+  "update_plan", "request_user_input", "get_goal", "create_goal", "update_goal",
+]);
 
 export type MuseToolNameAliases = ReadonlyMap<string, string>;
 
@@ -80,12 +83,12 @@ export function museWireToolName(originalName: string, used?: Set<string>): stri
  * collision domain first, then long or charset-unsafe names alias in that same order.
  * `aliases` is wireName -> originalName for identities that actually changed.
  */
-export function buildMuseToolNameAliasPlan(originalNames: readonly string[], aliasUpdatePlan = false): {
+export function buildMuseToolNameAliasPlan(originalNames: readonly string[], aliasMuseCodeTools = false): {
   wireByOriginal: Map<string, string>;
   aliases: Map<string, string>;
 } {
   // Reserve the rejected identity so the existing collision-safe hash path aliases it.
-  const used = new Set<string>(aliasUpdatePlan ? ["update_plan"] : []);
+  const used = new Set<string>(aliasMuseCodeTools ? MUSE_CODE_REJECTED_TOOL_NAMES : []);
   const wireByOriginal = new Map<string, string>();
   const unique: string[] = [];
   const seen = new Set<string>();
@@ -95,7 +98,7 @@ export function buildMuseToolNameAliasPlan(originalNames: readonly string[], ali
     unique.push(name);
   }
   for (const name of unique) {
-    if (!isPassThroughMuseToolName(name) || (aliasUpdatePlan && name === "update_plan")) continue;
+    if (!isPassThroughMuseToolName(name) || (aliasMuseCodeTools && MUSE_CODE_REJECTED_TOOL_NAMES.has(name))) continue;
     used.add(name);
     wireByOriginal.set(name, name);
   }
@@ -259,15 +262,15 @@ function authorizedMuseAliases(
 
 /**
  * Rewrite function/custom tool identities for the Meta Muse 64-char wire limit.
- * Muse Code can also alias update_plan, which its endpoint rejects by name.
+ * Muse Code also aliases confirmed client-tool identities rejected by its endpoint.
  * Arguments, user text, and schema property names stay untouched.
  */
-export function rewriteMuseToolNamesForUpstream(body: unknown, aliasUpdatePlan = false): {
+export function rewriteMuseToolNamesForUpstream(body: unknown, aliasMuseCodeTools = false): {
   body: unknown;
   aliases: Map<string, string>;
 } {
   if (!isPlainObject(body)) return { body, aliases: new Map() };
-  const { wireByOriginal, aliases } = buildMuseToolNameAliasPlan(collectMuseToolNames(body), aliasUpdatePlan);
+  const { wireByOriginal, aliases } = buildMuseToolNameAliasPlan(collectMuseToolNames(body), aliasMuseCodeTools);
   if (aliases.size === 0) return { body, aliases };
 
   let tools = body.tools;
