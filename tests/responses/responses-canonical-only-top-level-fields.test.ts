@@ -105,3 +105,26 @@ test("the strip removes the key and nothing else", () => {
     { type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] },
   ]);
 });
+
+test("routed agent requests omit OpenAI encrypted-output includes without mutating history", () => {
+  const include = ["reasoning.encrypted_content", "output.encrypted_content", "web_search_call.action.sources"];
+  const rawBody = codexBody({ include });
+  for (const baseUrl of ["https://api.x.ai/v1", "https://api.meta.ai/v1", THIRD_PARTY_KEY.baseUrl]) {
+    const sent = sentBody({ ...THIRD_PARTY_KEY, baseUrl }, rawBody);
+    expect(sent.include).toEqual(["reasoning.encrypted_content", "web_search_call.action.sources"]);
+  }
+  expect(rawBody.include).toBe(include);
+  expect(include).toEqual(["reasoning.encrypted_content", "output.encrypted_content", "web_search_call.action.sources"]);
+});
+
+test("OpenAI destinations retain the encrypted-output include", () => {
+  for (const provider of [CANONICAL_FORWARD, OPENAI_API_KEY]) {
+    expect(sentBody(provider, codexBody({ include: ["output.encrypted_content"] })).include)
+      .toEqual(["output.encrypted_content"]);
+  }
+});
+
+test("routed requests omit an include list containing only encrypted output", () => {
+  expect(sentBody(THIRD_PARTY_FORWARD, codexBody({ include: ["output.encrypted_content"] })))
+    .not.toHaveProperty("include");
+});

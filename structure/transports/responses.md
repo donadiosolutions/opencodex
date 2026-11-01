@@ -191,6 +191,8 @@ fails (#4853). The key is scoped by DESTINATION rather than by the canonical sur
 `/responses/compact` request without passing through this adapter and applies the same destination strip: official destinations keep it, including native v1; opted-in custom gateways do not. Stripping on the canonical predicate would make
 `openai-apikey` behave differently on its two endpoints. Native compact also applies the [Google replay projection](../providers/google.md#google-tool-call-thought-signature-replay) before its direct send.
 
+The same destination strip removes only `output.encrypted_content` from `include`: Grok and Muse reject that OpenAI agent-output selector before inference. Other selectors retain their order; an emptied list is omitted. OpenAI-operated routes preserve the selector, and caller-owned history is never mutated. `tests/responses/responses-canonical-only-top-level-fields.test.ts` covers these boundaries.
+
 This table is not an unknown-parameter sanitizer, and the distinction is the point. It lists keys a
 client is observed to send, so an unrecognized top-level key reaches the wire untouched rather than
 being deleted on the theory that the destination would have rejected it. `codex_output_schema` is

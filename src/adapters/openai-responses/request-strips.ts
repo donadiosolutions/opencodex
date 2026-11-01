@@ -247,10 +247,19 @@ const CANONICAL_ONLY_TOP_LEVEL_FIELDS: readonly string[] = [
  */
 export function stripCanonicalOnlyTopLevelFields(body: unknown): unknown {
   if (!isPlainObject(body)) return body;
-  if (!CANONICAL_ONLY_TOP_LEVEL_FIELDS.some(field => Object.hasOwn(body, field))) return body;
+  const hasPrivateInclude = Array.isArray(body.include)
+    && body.include.includes("output.encrypted_content");
+  if (!hasPrivateInclude && !CANONICAL_ONLY_TOP_LEVEL_FIELDS.some(field => Object.hasOwn(body, field))) return body;
 
   const next = { ...body };
   for (const field of CANONICAL_ONLY_TOP_LEVEL_FIELDS) delete next[field];
+  // Codex requests encrypted agent output from OpenAI even when routing to a third party.
+  // Strict gateways reject this selector before inference; preserve their other includes.
+  if (hasPrivateInclude) {
+    const include = (body.include as unknown[]).filter(value => value !== "output.encrypted_content");
+    if (include.length > 0) next.include = include;
+    else delete next.include;
+  }
   return next;
 }
 
