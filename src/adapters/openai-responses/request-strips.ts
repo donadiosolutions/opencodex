@@ -220,6 +220,22 @@ export function stripInternalChatMessageMetadataPassthrough(body: unknown): unkn
   return changed ? { ...body, input } : body;
 }
 
+/** Remove a response-only token count rejected by the OpenAI input metadata schema. */
+export function stripInternalChatMessageTokenCount(body: unknown): unknown {
+  if (!isPlainObject(body) || !Array.isArray(body.input)) return body;
+  let input: unknown[] | undefined;
+  for (let index = 0; index < body.input.length; index += 1) {
+    const item = body.input[index];
+    if (!isPlainObject(item)) continue;
+    const metadata = item.internal_chat_message_metadata_passthrough;
+    if (!isPlainObject(metadata) || !Object.hasOwn(metadata, "content_token_count")) continue;
+    const { content_token_count: _count, ...rest } = metadata;
+    input ??= [...body.input];
+    input[index] = { ...item, internal_chat_message_metadata_passthrough: rest };
+  }
+  return input ? { ...body, input } : body;
+}
+
 /** ChatGPT account access-program selection is not part of the public Responses API. */
 export function stripChatGptAccessPrograms(body: unknown): unknown {
   if (!isPlainObject(body) || !Object.hasOwn(body, "access_programs")) return body;

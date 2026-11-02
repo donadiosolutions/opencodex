@@ -3,7 +3,8 @@
 OpenAI-operated Responses destinations repair replayed `url_citation` annotations to the required
 string title and non-negative integer indices through `repairUrlCitationAnnotations` in
 `src/adapters/openai-responses/request-strips.ts`. Provider metadata stripping remains an
-independent projection. The ordinary HTTP/WS adapter in
+independent projection. At the same destination boundary, `stripInternalChatMessageTokenCount`
+removes the rejected `content_token_count` leaf without mutating shared input or other metadata. The ordinary HTTP/WS adapter in
 `src/adapters/openai-responses/passthrough.ts` applies citation repair only after destination
 classification.
 

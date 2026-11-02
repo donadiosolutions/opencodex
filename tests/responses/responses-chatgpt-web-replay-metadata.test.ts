@@ -1,5 +1,7 @@
 import { expect, test } from "bun:test";
 import { createResponsesPassthroughAdapter as createResponsesPassthroughAdapterProduction } from "../../src/adapters/openai-responses";
+import { stripInternalChatMessageTokenCount } from "../../src/adapters/openai-responses/request-strips";
+import { prepareCodexWsRequest } from "../../src/server/responses/codex-ws-request";
 import type { OcxProviderConfig } from "../../src/types";
 import { withTestTranslatorBudget } from "../helpers/translator-budget";
 
@@ -142,5 +144,46 @@ test("opted-in preserveResponsesInputItemIds on xAI destination still repairs cu
       expect(String(items[0]!.id)).toStartWith("ctc_");
       expect(items[1]!.id).toBe("msg_user_kept");
     }
+  }
+});
+
+for (const authMode of ["forward", "key"] as const) {
+  test(`OpenAI ${authMode} drops rejected token counts from HTTP and WS replay only`, () => {
+    const provider: OcxProviderConfig = { adapter: "openai-responses", authMode,
+      baseUrl: authMode === "forward" ? "https://chatgpt.com/backend-api/codex" : "https://api.openai.com/v1",
+      preserveResponsesMessageMetadata: true };
+    const raw = sampleCodexClientBody();
+    const metadata = { turn_id: "turn_abc_456", content_token_count: 42, create_time: 123,
+      content_item_kinds: ["user.text"], future_field: "preserved" };
+    Object.assign(raw.input[0]!.internal_chat_message_metadata_passthrough, metadata);
+    const before = structuredClone(raw);
+    const request = createResponsesPassthroughAdapter(provider).buildRequest({
+      modelId: "gpt-6-luna", context: { messages: [] }, stream: true, options: {}, _rawBody: raw,
+    }, { headers: new Headers({ authorization: "Bearer fixture" }) });
+    try {
+      const ws = prepareCodexWsRequest(request.url, { method: request.method, headers: request.headers, body: request.body });
+      expect(ws).not.toBeNull();
+      for (const body of [JSON.parse(request.body), JSON.parse(ws!.frameText), JSON.parse(ws!.httpInit.body as string)]) {
+        expect(body.input[0].internal_chat_message_metadata_passthrough).toEqual({
+          turn_id: "turn_abc_456", conversation_id: "conv_xyz", create_time: 123, content_item_kinds: ["user.text"], future_field: "preserved",
+        });
+      }
+      expect(raw).toEqual(before);
+    } finally { request.releaseBodyObservation?.(); }
+  });
+}
+
+test("opted-in third-party replay retains its own token-count metadata", () => {
+  const raw = sampleCodexClientBody();
+  Object.assign(raw.input[0]!.internal_chat_message_metadata_passthrough, { content_token_count: 42 });
+  const sent = sentBody(CHATGPT_WEB_RELAY_KEY, raw);
+  expect((sent.input as Record<string, unknown>[])[0]!.internal_chat_message_metadata_passthrough)
+    .toEqual(raw.input[0]!.internal_chat_message_metadata_passthrough);
+});
+
+test("token-count projection preserves clean and malformed metadata by reference", () => {
+  for (const body of [null, {}, { input: "text" }, { input: [null, { internal_chat_message_metadata_passthrough: null },
+    { internal_chat_message_metadata_passthrough: "opaque" }, { internal_chat_message_metadata_passthrough: { turn_id: "t" } }] }]) {
+    expect(stripInternalChatMessageTokenCount(body)).toBe(body);
   }
 });

@@ -66,7 +66,7 @@ describe("native compact item extensions (#7111)", () => {
         model: `${name}/gpt-6-sol`,
         input: [
           { role: "user", content: "Compact the completed tool call." },
-          { ...call, extra_content: { google: { thought_signature: "synthetic-signature-7111" } } },
+          { ...call, internal_chat_message_metadata_passthrough: { turn_id: "fixture-turn", content_token_count: 42 }, extra_content: { google: { thought_signature: "synthetic-signature-7111" } } },
           output,
           assistant,
         ],
@@ -81,7 +81,7 @@ describe("native compact item extensions (#7111)", () => {
       await response.text();
       expect(calls).toHaveLength(1);
       expect(calls[0]!.url).toBe(`${provider.baseUrl}/responses/compact`);
-      expect(calls[0]!.body.input).toEqual([body.input[0], call, output, {
+      expect(calls[0]!.body.input).toEqual([body.input[0], { ...call, internal_chat_message_metadata_passthrough: { turn_id: "fixture-turn" } }, output, {
         ...assistant, content: [{ ...assistant.content[0], annotations: [
           { ...citation, title: citation.url, start_index: 3, end_index: 0 },
         ] }],

@@ -23,6 +23,8 @@ adapter own retries/timeouts, while `runTurn` supports transports that cannot be
 HTTP fetch followed by one response stream. [`bridge.ts`](/reference/architecture/#the-bridge)
 then turns the events into Responses SSE.
 
+OpenAI Responses replay removes the unsupported `content_token_count` field from internal message metadata before HTTP, WebSocket, and native compaction requests. Other message metadata is preserved; third-party relays that opt into metadata preservation keep their original fields.
+
 ## Shared tool argument repair
 
 The bridge repairs integral floats in integer fields and safe bare integers in string-only
