@@ -101,6 +101,7 @@ import { applyClientIdentitySnapshot } from "../transaction-client-capture";
 import type { RequestMetricsRecorder } from "../request-metrics";
 import { resolveInboundBodyLimitBytes } from "../request-decompress";
 import { responseToolOwnership } from "../responses/response-tool-ownership";
+import { runTurnStateCallerScope } from "../turn-state-handles";
 
 /**
  * The WebSocket half of the Bun.serve options, split out of serve-options.ts to keep that file
@@ -320,7 +321,8 @@ export function createWebsocketHandler(
         const payload: Record<string, unknown> = { ...frame };
         delete payload.type;
         turnAdmissionLease.bindAbortController(turnAbort);
-        void (async () => {
+        // The frame runs with its own caller slot, which admission fills for turn-state handle binding.
+        void runTurnStateCallerScope(async () => {
           const start = Date.now();
           const requestId = nextRequestLogId(start);
           // Resolved once at the handshake — a frame has no request headers left
@@ -462,7 +464,7 @@ export function createWebsocketHandler(
             if (!logged && turnAbort.signal.aborted) finalizeLog(499);
             if (ws.data.cancel === cancelTurn) ws.data.cancel = undefined;
           }
-        })();
+        });
       },
       close(ws: ServerWebSocket<WsData>, code: number, reason: string) {
         if (ws.data.kind === "remote-workspace-agent") {

@@ -108,7 +108,7 @@ async function committedExchange(answersPings: boolean, { holdMs = 0, diesInPrea
   const hold = holdMs > 0 ? { maxMs: holdMs, until: Number.MAX_SAFE_INTEGER } : undefined;
   const pending = codexWsUpstreamFetch(
     CODEX_URL, streamingInit(), noFallback, BOUNDED_WS_RUNTIME,
-    undefined, undefined, undefined, undefined, undefined, hold,
+    undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined, hold,
   );
   if (hold) {
     await flush();
