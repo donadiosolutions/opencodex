@@ -5,6 +5,7 @@
 import type { RequestLogEntry } from "./request-log";
 import { matchesLogConversationId } from "./request-log-conversation";
 import { isDeliveryMode } from "../protocols/contract";
+import { usageDetailCutoff } from "../usage/retention-contract";
 
 /** Capacity of the in-memory request log ring; also the upper bound of `tail` and `limit`. */
 export const MAX_LOG_SIZE = 2000;
@@ -43,13 +44,15 @@ export function queryRequestLogs(
   const status = params.get("status")?.trim().toLowerCase();
 
   const hasFilters = Boolean(provider || conversationId || model || account || protocolMode || status);
+  const cutoff = usageDetailCutoff();
   let filtered: RequestLogEntry[];
   if (!hasFilters) {
-    filtered = logs;
+    filtered = logs.filter(entry => entry.timestamp >= cutoff);
   } else {
     const statusClass = status && /^[1-5]xx$/.test(status) ? Number(status[0]) : undefined;
     filtered = [];
     for (const entry of logs) {
+      if (entry.timestamp < cutoff) continue;
       if (provider && entry.provider !== provider && !entry.attempts?.some(attempt => attempt.provider === provider)) continue;
       if (conversationId && !matchesLogConversationId(entry.conversationId, conversationId)) continue;
       if (model && !matchesModel(entry, model) && !entry.attempts?.some(attempt => matchesModel(attempt, model))) continue;

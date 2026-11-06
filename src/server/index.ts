@@ -116,7 +116,7 @@ import {
   type RequestLogContext,
   type RequestLogEntry,
 } from "./request-log";
-import { setUsageLedgerRetention } from "./usage-ledger-retention";
+import { setUsageLedgerRetention, stopUsageLedgerRetention } from "./usage-ledger-retention";
 export {
   addFinalRequestLog,
   filterRequestLogs, queryRequestLogs,
@@ -747,7 +747,7 @@ function startServerWithSpendLedgerOwner(port: number | undefined, deps: StartSe
           ...(managementIngressRef
             ? [() => managementIngressRef.stop(closeActiveConnections)]
             : []),
-          () => optionalListeners.stop(),
+          async () => { await stopUsageLedgerRetention(); await optionalListeners.stop(); },
           async () => { await remoteWorkspaceShutdown?.(); },
           async () => { await desktopCompatibilityStartup?.shutdown(); await desktopCompatibilityShutdown?.(); },
           async () => {

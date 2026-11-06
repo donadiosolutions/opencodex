@@ -4024,6 +4024,8 @@ export const pt: Record<TKey, string> = {
   "usage.range.required": "Informe a data e hora de início e de fim.",
   "usage.range.invalid": "Informe datas e horas locais válidas, a partir de 01/01/1970 UTC.",
   "usage.range.reversed": "O fim deve ser igual ou posterior ao início.",
+  "usage.range.historicalDailyPrecisionRequired": "Para datas anteriores à compactação do histórico detalhado, escolha dias locais completos (início às 00:00 e fim às 23:59).",
+  "usage.historyRetention": "Os detalhes de uso são mantidos por {days} dias. O histórico anterior é exibido em resumos diários, e as estimativas de custo ficam congeladas.",
   "usage.range.applied": "Intervalo selecionado: {start} – {end} (ambos inclusivos).",
   "models.pickerOrder.editorHint": "Reordene os modelos roteados e salve seu rascunho. As linhas em destaque são fixas; modelos nativos não são exibidos.",
   "models.pickerOrder.nativeLocked": "Esta ordem salva inclui modelos nativos. Aplique um preset roteado ou Padrão antes de editar o Personalizado.",

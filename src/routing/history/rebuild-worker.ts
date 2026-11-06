@@ -33,7 +33,7 @@ function handle(request: RebuildWorkerRequest): RebuildWorkerReply {
     }
   }
   removeAbandonedBuilds(request.indexPath);
-  const rows = buildIndexFile(request.buildPath, request.reason, request.revision);
+  const rows = buildIndexFile(request.buildPath, request.reason, request.revision, request.now);
   return { type: "built", rows };
 }
 

@@ -4050,6 +4050,8 @@ export const ko: Record<TKey, string> = {
   "usage.range.required": "시작과 종료 날짜 및 시간을 모두 입력하세요.",
   "usage.range.invalid": "1970-01-01 UTC 이후의 유효한 현지 날짜와 시간을 입력하세요.",
   "usage.range.reversed": "종료 시각은 시작 시각과 같거나 이후여야 합니다.",
+  "usage.range.historicalDailyPrecisionRequired": "상세 기록이 일별로 정리된 날짜는 현지 보고일 전체를 선택하세요(시작 00:00, 종료 23:59).",
+  "usage.historyRetention": "상세 사용량은 {days}일 동안 보관됩니다. 이전 기록은 일별 요약으로 표시되며 비용 추정치는 고정됩니다.",
   "usage.range.applied": "선택한 기간: {start} – {end} (양 끝 시각 포함).",
   "models.pickerOrder.editorHint": "라우팅 모델의 순서를 바꾼 뒤 초안을 저장하세요. 추천 모델은 고정되며 네이티브 모델은 표시하지 않습니다.",
   "models.pickerOrder.nativeLocked": "저장된 순서에 네이티브 모델이 포함되어 있습니다. 라우팅 프리셋이나 기본값을 적용한 뒤 사용자 지정 순서를 편집하세요.",

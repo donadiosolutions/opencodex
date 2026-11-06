@@ -16,6 +16,8 @@ import { SectionTabs } from "../components/section-tabs";
 import { sectionAnchorId } from "../section-anchors";
 import { parseUsageTimeRange, type UsageRangeError, type UsageTimeWindow } from "../usage-time-range";
 import UsageCompanionView from "./usage-companion-view";
+import { UsageHistoryRetentionNotice } from "./usage-history-retention";
+import { hasDailyPrecision, requiresDailyPrecision, type UsageHistoryMetadata } from "./usage-history-retention-utils";
 import { readUsageTab, selectUsageTab, usageTabKeyDown } from "./usage-tab-keydown";
 
 type Range = "all" | "30d" | "7d";
@@ -109,6 +111,7 @@ interface UsageProvider {
 class UsageWindowMismatchError extends Error {}
 
 interface UsageResponse extends UsageReadMetadata {
+  history?: UsageHistoryMetadata;
   range: Range;
   surface: UsageSurface;
   since: number | null;
@@ -1226,6 +1229,10 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
               setRangeError(result.error);
               return;
             }
+            if (requiresDailyPrecision(result.window.since, data?.history) && !hasDailyPrecision(draftWindow.since, draftWindow.until, result.window, data?.history)) {
+              setRangeError("historicalDailyPrecisionRequired");
+              return;
+            }
             setRangeError(null);
             setCustomWindow(result.window);
           }}>
@@ -1299,6 +1306,7 @@ export default function Usage({ apiBase, connected = false, apiKeyId }: { apiBas
             </Notice>
           )}
           <UsageIncompleteNotice data={data} />
+          <UsageHistoryRetentionNotice history={data?.history} t={t} />
           {data?.historyTruncated && (
             // Naming the loaded window is the point: without it, `30d` and "Available history"
             // look identical on a busy installation even though both may cover far less than

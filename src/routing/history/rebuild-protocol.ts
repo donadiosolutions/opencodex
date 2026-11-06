@@ -8,6 +8,7 @@ export type RebuildWorkerRequest = {
   buildPath: string;
   reason: string;
   revision: UsageLogRevision;
+  now?: number;
 } | { type: "check"; indexPath: string };
 
 export type RebuildWorkerReply =

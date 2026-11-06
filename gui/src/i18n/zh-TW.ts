@@ -4014,6 +4014,8 @@ export const zhTW: Record<TKey, string> = {
   "usage.range.required": "請輸入開始和結束的日期及時間。",
   "usage.range.invalid": "請輸入不早於 1970-01-01 UTC 的有效本地日期和時間。",
   "usage.range.reversed": "結束時間必須等於或晚於開始時間。",
+  "usage.range.historicalDailyPrecisionRequired": "詳細歷史記錄彙整之前的日期，請選擇完整的本地報告日（開始 00:00，結束 23:59）。",
+  "usage.historyRetention": "詳細使用記錄保留 {days} 天。較早的歷史記錄以每日摘要顯示，其費用估算維持不變。",
   "usage.range.applied": "所選範圍：{start} – {end}（包含兩端）。",
   "models.pickerOrder.editorHint": "調整路由模型順序後儲存草稿。精選列固定，原生模型不在此顯示。",
   "models.pickerOrder.nativeLocked": "已儲存的順序包含原生模型。請先套用路由預設或預設順序，再編輯自訂順序。",

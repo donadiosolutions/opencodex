@@ -22,6 +22,10 @@ export const USAGE_LEDGER_BOUNDARY_DIGEST_BYTES = 64 * 1024;
 export interface ScanUsageLedgerOptions {
   signal?: AbortSignal;
   onEntry: (entry: PersistedUsageEntry) => void;
+  /** An accounting consumer may handle a versioned record before detail normalization. */
+  onRecord?: (value: unknown) => boolean;
+  /** Destructive migration/read-model rebuilds may not silently drop committed accounting. */
+  strictAccounting?: boolean;
   /** Absolute LF boundary returned by a previous scan. Defaults to byte zero. */
   startAtBytes?: number;
   /** Stable path/dev/ino/birthtime identity; required when startAtBytes is nonzero. */
@@ -307,14 +311,22 @@ export async function scanUsageLedgerCooperatively(
     const publishLine = (): void => {
       if (lineLength === 0 || isJsonWhitespace(line, lineLength)) return;
       let entry: PersistedUsageEntry | undefined;
+      let parsed: unknown;
       try {
         const text = decoder.decode(line.subarray(0, lineLength));
-        entry = normalizePersistedUsageRow(JSON.parse(text));
+        parsed = JSON.parse(text);
       } catch {
+        if (options.strictAccounting) throw new Error("Invalid committed usage accounting record");
         invalidRows += 1;
         return;
       }
+      if (options.onRecord?.(parsed)) { parsedRows += 1; return; }
+      // Rollups are accounting, never a source of synthetic request details.
+      if (parsed && typeof parsed === "object" && "kind" in parsed
+        && (parsed as { kind: unknown }).kind === "usage-rollup") return;
+      entry = normalizePersistedUsageRow(parsed);
       if (!entry) {
+        if (options.strictAccounting) throw new Error("Invalid committed usage accounting record");
         invalidRows += 1;
         return;
       }
@@ -349,6 +361,7 @@ export async function scanUsageLedgerCooperatively(
 
         if (!droppingOversizedLine) {
           if (lineLength + segmentLength > USAGE_LEDGER_MAX_LINE_BYTES) {
+            if (options.strictAccounting) throw new Error("Oversized usage accounting record");
             oversizedRows += 1;
             droppingOversizedLine = true;
             lineLength = 0;

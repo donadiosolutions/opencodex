@@ -339,3 +339,23 @@ export function activeConfiguredProviders(): ReadonlySet<string> {
 export function activeAccountPricingProviders(): ReadonlyMap<string, string> {
   return activeAccountProviders;
 }
+
+/** Content-free pricing registry snapshot passed to the owned compaction worker. */
+export interface UserCostOverlaySnapshot {
+  rows: readonly ExpectedPriceOverlay[];
+  configuredProviders: readonly string[];
+  accountPricingProviders: readonly (readonly [string, string])[];
+}
+
+export function captureUserCostOverlaySnapshot(): UserCostOverlaySnapshot {
+  return structuredClone({ rows: active, configuredProviders: [...activeConfigured], accountPricingProviders: [...activeAccountProviders] });
+}
+
+/** Internal worker initialization; never accepts a management API payload. */
+export function applyUserCostOverlaySnapshot(snapshot: UserCostOverlaySnapshot): void {
+  active = structuredClone(snapshot.rows);
+  activeConfigured = new Set(snapshot.configuredProviders);
+  activeAccountProviders = new Map(snapshot.accountPricingProviders);
+  activeSignature = JSON.stringify(snapshot);
+  version++;
+}

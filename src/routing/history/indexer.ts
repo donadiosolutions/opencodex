@@ -52,6 +52,7 @@ import { buildFilePath, removeBuildFiles } from "./build-file";
 import { RebuildWorkerJob } from "./rebuild-job";
 import { RequestHistoryIntegrityMonitor, type RequestHistoryIntegrityOptions } from "./integrity";
 import { isHistoryIndexCorruption } from "./sqlite-errors";
+import { usageDetailCutoff, usageDetailNow } from "../../usage/retention-contract";
 
 export {
   REQUEST_HISTORY_INSERT_BATCH,
@@ -69,6 +70,8 @@ export interface RequestHistoryIndexMeta {
   builtAtMs: number;
   lastError: string | null;
 }
+
+export interface RequestHistoryReadOptions { now?: number }
 
 export interface RequestHistoryFilters {
   provider?: string;
@@ -402,7 +405,7 @@ function startWorkerRebuild(reason: string, revision: UsageLogRevision): WorkerR
   const indexPath = dbPath || indexDbPath();
   const buildPath = buildFilePath(indexPath, process.pid, ++buildSequence);
   const rebuild: { job: RebuildJob; promise: Promise<void> } = { job, promise: Promise.resolve() };
-  rebuild.promise = job.build(indexPath, buildPath, reason, revision)
+  rebuild.promise = job.build(indexPath, buildPath, reason, revision, usageDetailNow())
     .then(() => {
       if (lifetime !== indexLifetime) throw new RequestHistoryIndexClosedError();
       installBuild(buildPath, indexPath);
@@ -643,6 +646,7 @@ function queryRows(
   filters: RequestHistoryFilters,
   cursor: HistoryCursor | null,
   limit: number,
+  now = usageDetailNow(),
 ): { rows: Array<HistoryQueryRow>; fetched: number } {
   const where: string[] = [];
   const values: Array<string | number> = [];
@@ -650,6 +654,7 @@ function queryRows(
     where.push(clause);
     values.push(value);
   };
+  add("timestamp >= ?", usageDetailCutoff(now));
   if (filters.provider !== undefined) add("provider = ?", filters.provider);
   if (filters.model !== undefined) add("model = ?", filters.model);
   // Rows store the bounded encoded form, so the lookup value must be encoded the
@@ -721,6 +726,7 @@ export async function queryRequestHistory(
   filters: RequestHistoryFilters,
   rawCursor: string | null | undefined,
   pageSize: number | undefined,
+  options: RequestHistoryReadOptions = {},
 ): Promise<RequestHistoryPage> {
   const cursor = decodeHistoryCursor(rawCursor);
   if (rawCursor !== null && rawCursor !== undefined && cursor === null) {
@@ -731,7 +737,7 @@ export async function queryRequestHistory(
     REQUEST_HISTORY_MAX_PAGE_SIZE,
   );
   const { rows, fetched, meta } = await withRequestHistoryRead((handle, meta) => ({
-    ...queryRows(handle, filters, cursor, limit), meta,
+    ...queryRows(handle, filters, cursor, limit, options.now), meta,
   }));
   const hasMore = fetched > limit;
   const pageRows = rows.slice(0, limit);
@@ -748,8 +754,8 @@ export async function queryRequestHistory(
   return { rows: entries, ...(nextCursor ? { nextCursor } : {}), hasMore, meta };
 }
 
-export async function requestHistoryRowById(requestId: string): Promise<PersistedUsageEntry | null> {
-  const row = await withRequestHistoryRead(handle => handle.query("SELECT row_json FROM requests WHERE request_id = ?").get(requestId) as
+export async function requestHistoryRowById(requestId: string, options: RequestHistoryReadOptions = {}): Promise<PersistedUsageEntry | null> {
+  const row = await withRequestHistoryRead(handle => handle.query("SELECT row_json FROM requests WHERE request_id = ? AND timestamp >= ?").get(requestId, usageDetailCutoff(options.now)) as
     | { row_json: string }
     | undefined);
   return hydrateRow(row);

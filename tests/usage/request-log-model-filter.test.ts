@@ -1,6 +1,10 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { queryRequestLogs } from "../../src/server/request-log-filter";
 import { log } from "../helpers/request-log-entry";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
+
+beforeEach(() => setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS));
+afterEach(() => setUsageDetailNowForTests(undefined));
 
 test("model filters accept the printed provider/model and the bare ID before pagination", () => {
   const rows = [

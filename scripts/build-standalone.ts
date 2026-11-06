@@ -39,6 +39,7 @@ const WORKER_ENTRIES: Record<string, string> = {
   "history-worker": join(repoRoot, "src", "codex", "history-worker.ts"),
   "cli-update-worker": join(repoRoot, "src", "codex", "cli-update-worker.ts"),
   "request-history-rebuild-worker": join(repoRoot, "src", "routing", "history", "rebuild-worker.ts"),
+  "usage-compaction-worker": join(repoRoot, "src", "usage", "compaction-worker.ts"),
   "windows-native-principal-worker": join(repoRoot, "src", "lib", "windows-native-principal-worker.ts"),
 };
 const GEN_FILE = join(repoRoot, "src", "generated", "worker-bundles.gen.ts");

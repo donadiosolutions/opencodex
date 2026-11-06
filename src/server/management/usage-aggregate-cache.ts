@@ -14,6 +14,7 @@ import {
   type UsageSummaryAccumulator,
 } from "../../usage/summary";
 import { userCostOverlayVersion } from "../../usage/user-cost-overlays";
+import { hasCompactedUsageLedger, readUsageAccounting } from "../../usage/accounting-store";
 import type { UsageTimeWindow } from "../../usage/time-range";
 import {
   createJevStatsAccumulator,
@@ -273,6 +274,7 @@ async function refreshAggregate(options: UsageAggregateOptions): Promise<UsageAg
 export async function getUsageAggregate(
   options: UsageAggregateOptions = {},
 ): Promise<UsageAggregateResult> {
+  if (hasCompactedUsageLedger()) return readUsageAccounting({ now: options.now });
   if (baseFlight) return baseFlight;
   const flight = refreshAggregate(options);
   baseFlight = flight;
@@ -298,6 +300,7 @@ export async function getFilteredUsageAggregate(filter: {
   model?: string | null;
   apiKeyId?: string | null;
 }, window?: UsageTimeWindow): Promise<UsageAggregateResult> {
+  if (hasCompactedUsageLedger()) return readUsageAccounting({ filter, window });
   const fixedWindow = window ? Object.freeze({ ...window }) : undefined;
   const normalizedFilter = {
     provider: normalizeFilterValue(filter.provider),

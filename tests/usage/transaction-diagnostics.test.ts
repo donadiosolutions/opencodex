@@ -36,6 +36,7 @@ import {
   type PersistedUsageEntry,
 } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
 import { recordContextTransformation, recordCompletedCompaction, recordReconstructedContext, recordContextEstimate,
   recordProtocolEvent, recordRequestShape } from "../../src/server/transaction-capture";
 import type { RequestLogContext } from "../../src/server/request-log";
@@ -599,6 +600,7 @@ test("stream facts reject unknown event values and synthetic IDs", async () => {
 });
 
 beforeEach(() => {
+  setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS);
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-transaction-diagnostics-"));
   process.env.OPENCODEX_HOME = home;
@@ -607,6 +609,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setUsageDetailNowForTests(undefined);
   closeRequestHistoryIndex();
   clearRequestLogsForTests();
   resetUsageReadCacheForTests();

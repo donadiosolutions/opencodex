@@ -38,7 +38,7 @@ passthrough, including native WebSocket output, retain their existing stop behav
 | `corsAllowOrigins?` | `string[]` | `[]` | Additional exact origins allowed by CORS. Loopback origins are always allowed. Authority-based browser extension origins such as `chrome-extension://<extension-id>` are supported; `*` is not a wildcard. Firefox and Safari regenerate the extension UUID (per install / per browser launch), so update the entry when the origin changes. |
 | `apiKeys?` | `OcxApiKey[]` | `[]` | Generated `ocx_…` data-plane admission credentials on non-loopback binds. They do not authorize management APIs; management access uses the separate credential documented in the [management reference](/reference/management-api/). Dashboard-managed. |
 | `storageCleanupPolicy?` | `StorageCleanupPolicy` | disabled | Opt-in archived-session cleanup policy. Never enabled implicitly. |
-| `usageLedgerMaxBytes?` | `number` | unset | Opt-in ceiling in bytes for `usage.jsonl`. Absent means the request history grows without limit, which stays the default. See [usage history size](#usage-history-size). |
+| `usageLedgerMaxBytes?` | `number` | unset | Legacy byte-ceiling setting retained for compatibility; it is advisory and cannot delete usage accounting or the seven-day detailed rows. See [usage history size](#usage-history-size). |
 | `appOwnedMemoryBudgetMb?` | `number` | `256` | Cap in MiB for evictable app-owned logs, caches, blobs, and continuation payloads. Range 64–4096; not an RSS cap. |
 | `metricsExport.enabled?` | `boolean` | `false` | Enable process-local aggregate request metrics at authenticated `GET /api/metrics`. Restart required; disabled mode returns 404 and starts no exporter activity. |
 | `serviceHealthRecovery.enabled?` | `boolean` | `false` | Opt-in recovery for the background service: a small sentinel process probes `/healthz` and, when the proxy stays alive but answers nothing for about a minute of back-to-back probes, terminates it so the service manager (Task Scheduler, launchd, systemd, WinSW) restarts it. Only the managed service child starts one; requests the stuck process held are not replayed. At most three recoveries per hour. Restart required. Automatic recovery requires a numeric bind address (or the default localhost/wildcard mapping); DNS bind names are not monitored. A changed recorded address or port stops monitoring. |
@@ -494,23 +494,23 @@ with `POST /api/storage/cleanup-policy/run`.
 
 ## Usage history size
 
-`usageLedgerMaxBytes` is unset by default, and unset means the request history in `usage.jsonl`
-grows without limit. Nothing deletes history you did not ask to have deleted.
+`usage.jsonl` keeps detailed request rows for a rolling seven days. Startup and hourly maintenance
+compact older complete reporting days into versioned numeric rollup records in the same canonical
+ledger. Rollups preserve usage counts and coverage, scalar provider/model/API-key filter cells,
+account statistics and cost as calculated at compaction time. Historical totals remain available
+at daily granularity; `/api/usage` reports the detail boundary, historical granularity, frozen-cost
+policy, timezone and compaction boundary in its `history` metadata. Its daily chart remains capped
+at 366 days, while lifetime totals are uncapped. Custom bounds that intersect compacted history must
+cover complete reporting days; recent detailed rows support exact timestamp bounds. Diagnostic
+views expose no more than seven days of detail.
 
-Set it to a byte ceiling and the proxy trims the file after an append crosses it, keeping the
-newest whole rows and dropping the oldest. It trims a little below the ceiling rather than exactly
-to it, so the next append does not immediately re-cross the line. The minimum accepted value is
-1 MiB; a smaller number, or one that is not a safe integer, leaves the limit off rather than
-failing the configuration.
+`usageLedgerMaxBytes` remains accepted for compatibility but is advisory: it cannot delete numeric
+accounting or detailed rows within the seven-day window. The derived `usage-accounting.sqlite` is
+rebuildable and is not a substitute for `usage.jsonl`. Downgrading to a format that cannot read the
+rollups requires restoring a compatible snapshot and replaying later writes.
 
-Rows are copied byte for byte and never rewritten, so every field survives a trim — including
-fields a newer build wrote that an older one does not understand. The replacement is refused
-outright if anything appended to the ledger while it ran, so a request logged during a trim is
-never lost; the next append tries again. Trimming also refreshes what the dashboard shows, so
-`/api/logs` stops serving rows the ledger no longer has.
-
-There is no dashboard control for this yet; set it in `config.json` or with
-`ocx config set usageLedgerMaxBytes <bytes>`.
+There is no dashboard control for `usageLedgerMaxBytes`; it can still be set in `config.json` or
+with `ocx config set usageLedgerMaxBytes <bytes>`, but it does not control retention.
 
 ## Catalog auto-refresh (`catalogAutoRefresh`)
 

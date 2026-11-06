@@ -52,6 +52,8 @@ import {
   usageLogRevisionKey,
 } from "../../usage/log";
 import { getUsageDebugLogEntries } from "../../usage/debug";
+import { compactedUsageResponse } from "./compacted-usage-response";
+import { usageDetailCutoff } from "../../usage/retention-contract";
 import { parseUsageTimeWindow, type UsageTimeWindow } from "../../usage/time-range";
 import { USAGE_RANGES, USAGE_SURFACES, parseRange, parseUsageSurface, rangeWindow, type UsageRange, type UsageSummary, type UsageSurface } from "../../usage/summary";
 import { stripCodexRuntimeProviderFields } from "../../codex/auth-context";
@@ -135,7 +137,7 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
     const requestId = ids[0];
     if (ids.length !== 1 || !requestId?.trim() || requestId.length > 1024 || /[\u0000-\u001f\u007f]/.test(requestId)) return invalidId();
     // The live ring is bounded. Never rebuild the durable history index for a click.
-    const entry = getRequestLogEntries().find(entry => entry.requestId === requestId);
+    const entry = getRequestLogEntries().find(entry => entry.requestId === requestId && entry.timestamp >= usageDetailCutoff());
     if (!entry) return jsonResponse({ error: { code: "not_found", message: "request detail is no longer available" } }, 404);
     return jsonResponse(requestLogDto(entry));
   }
@@ -276,6 +278,8 @@ export async function handleLogsUsageRoutes(ctx: ManagementContext): Promise<Res
       .some(value => typeof value === "string" && value.trim() !== "");
     const now = Date.now();
     try {
+      const compacted = await compactedUsageResponse(range, surface, filter, window, now);
+      if (compacted) return jsonResponse(compacted.body, compacted.status);
       const cacheKey = `${range}:${surface}`;
       const effectiveReadLimit = config.managementUsageMaxReadBytes ?? 64 * 1024 * 1024;
       const observed = currentUsageLogRevision();

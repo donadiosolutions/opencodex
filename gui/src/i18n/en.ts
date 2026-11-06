@@ -4062,6 +4062,8 @@ export const en = {
   "usage.range.required": "Enter both a start and an end date and time.",
   "usage.range.invalid": "Enter valid local dates and times, on or after 1970-01-01 UTC.",
   "usage.range.reversed": "The end must be at or after the start.",
+  "usage.range.historicalDailyPrecisionRequired": "For dates before detailed history was compacted, choose whole local reporting days (start at 00:00 and end at 23:59).",
+  "usage.historyRetention": "Detailed usage is retained for {days} days. Older history is shown as daily summaries, and its cost estimates are frozen.",
   "usage.range.applied": "Selected interval: {start} – {end} (both inclusive).",
   "models.pickerOrder.editorHint": "Reorder routed models, then save your draft. Featured rows are fixed; native models are not shown.",
   "models.pickerOrder.nativeLocked": "This saved order includes native models. Apply a routed preset or Default before editing Custom.",

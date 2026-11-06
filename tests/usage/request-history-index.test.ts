@@ -41,6 +41,7 @@ import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -73,6 +74,7 @@ function seedRows(count: number, startTimestamp = 1000, provider = "a"): Persist
 }
 
 beforeEach(() => {
+  setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS);
   previousHome = process.env.OPENCODEX_HOME;
   testDir = mkdtempSync(join(tmpdir(), "ocx-history-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -81,6 +83,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setUsageDetailNowForTests(undefined);
   setManagementUsageMaxEntriesForTests(null);
   closeRequestHistoryIndex();
   // Management/config reads may still own a Windows ACL child after the query ends.

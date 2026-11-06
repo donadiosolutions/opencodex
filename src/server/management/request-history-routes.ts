@@ -17,6 +17,7 @@ import {
   REQUEST_HISTORY_MAX_PAGE_SIZE,
 } from "../../routing/history/indexer";
 import { InvalidCursorError } from "../../routing/history/cursor";
+import { usageHistoryMetadata } from "../../usage/retention-contract";
 import { requestLogEntryFromPersistedUsage } from "../request-log";
 import { requestLogDto } from "./shared";
 import { jsonResponse } from "../auth-cors";
@@ -164,6 +165,7 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
         entries: page.rows.map(row => requestLogDto(requestLogEntryFromPersistedUsage(row), { includeDecodeRate: false })),
         ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}),
         hasMore: page.hasMore,
+        history: usageHistoryMetadata(),
         index: {
           schemaVersion: page.meta.schemaVersion,
           indexedRows: page.meta.indexedRows,

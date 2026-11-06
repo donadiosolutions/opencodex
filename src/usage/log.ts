@@ -10,6 +10,7 @@ import { enforceAppOwnedMemoryBudget } from "../lib/app-owned-memory";
 import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
+import { usageDetailCutoff } from "./retention-contract";
 import {
   normalizePersistedJevDecision,
   type PersistedJevDecisionV1,
@@ -1859,7 +1860,7 @@ async function readUsageEntriesIncrementally(
  * The parsed tail is retained under the app-owned memory budget so an append reparses
  * only the appended bytes; the retained rows are evictable and are copied per caller.
  */
-export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_USAGE_MAX_READ_BYTES): Promise<{
+export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_USAGE_MAX_READ_BYTES, options: { now?: number } = {}): Promise<{
   entries: PersistedUsageEntry[];
   revision: UsageLogRevision | null;
   truncatedPrefixBytes: number;
@@ -1877,13 +1878,13 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
   const replacement = Boolean(existing && observedSize < existing.openedSize);
   if (!replacement && existing?.key === key && Date.now() - existing.startedAt <= MANAGEMENT_USAGE_FLIGHT_STALE_MS) {
     const shared = await existing.promise;
-    return { ...shared, entries: shared.entries.slice() };
+    return filterManagementUsageSnapshot(shared, options.now);
   }
   if (existing && (existing.key !== key || replacement || Date.now() - existing.startedAt > MANAGEMENT_USAGE_FLIGHT_STALE_MS)) {
     existing.abort.abort(new Error("management usage read superseded"));
   } else if (existing) {
     const shared = await existing.promise;
-    return { ...shared, entries: shared.entries.slice() };
+    return filterManagementUsageSnapshot(shared, options.now);
   }
   const abort = new AbortController();
   const retained = retainedUsageSnapshot;
@@ -1914,6 +1915,8 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
       entryLengths: snapshot.entryLengths,
       trailingSkippedBytes: snapshot.trailingSkippedBytes,
       rowsBeginAtBytes: snapshot.rowsBeginAtBytes,
+      // Keep rows paired with their original byte lengths and row start. Filtering
+      // here would make the next incremental read splice the wrong JSONL spans.
       entries: snapshot.entries,
       entriesTruncated: snapshot.entriesTruncated,
       entriesDropped: snapshot.entriesDropped,
@@ -1923,10 +1926,18 @@ export async function readUsageSnapshotForManagement(maxReadBytes = MANAGEMENT_U
       approxBytes: retainedUsageSnapshotBytes(snapshot.entries),
     };
     enforceAppOwnedMemoryBudget();
-    return { ...snapshot, entries: snapshot.entries.slice() };
+    return filterManagementUsageSnapshot(snapshot, options.now);
   } finally {
     if (managementUsageReadInflight?.promise === promise) managementUsageReadInflight = null;
   }
+}
+
+function filterManagementUsageSnapshot<T extends { entries: PersistedUsageEntry[] }>(snapshot: T, now?: number): T {
+  const cutoff = usageDetailCutoff(now);
+  return {
+    ...snapshot,
+    entries: snapshot.entries.filter(entry => !Number.isFinite(entry.timestamp) || entry.timestamp >= cutoff),
+  };
 }
 
 export async function readUsageEntriesForManagement(): Promise<PersistedUsageEntry[]> {
@@ -1937,6 +1948,7 @@ export async function readUsageEntriesForManagement(): Promise<PersistedUsageEnt
 export function normalizePersistedUsageRow(value: unknown): PersistedUsageEntry | undefined {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
   const row = value as Record<string, unknown>;
+  if (row.kind === "usage-rollup") return undefined;
   if (typeof row.requestId !== "string" || typeof row.provider !== "string") return undefined;
   return normalizeUsageEntry(row as unknown as PersistedUsageEntry);
 }
@@ -1976,7 +1988,7 @@ function parseUsageLines(lines: string[]): PersistedUsageEntry[] {
  * Read only the newest `limit` usage.jsonl rows without loading the whole append-only
  * file into memory. Used by request-log hydration on `ocx start`.
  */
-export function readRecentUsageEntries(limit: number, configDir?: string): PersistedUsageEntry[] {
+export function readRecentUsageEntries(limit: number, configDir?: string, options: { now?: number } = {}): PersistedUsageEntry[] {
   if (!Number.isFinite(limit) || limit <= 0) return [];
   const path = usageLogPath(configDir);
   if (!existsSync(path)) return [];
@@ -2007,7 +2019,8 @@ export function readRecentUsageEntries(limit: number, configDir?: string): Persi
       // Parse ALL lines first, then take the last N valid entries. This way corrupt
       // or partial lines are filtered out during parsing and we always return the
       // most recent N valid rows (not N physical lines minus corrupt ones).
-      const entries = parseUsageLines(lines);
+      const cutoff = usageDetailCutoff(options.now);
+      const entries = parseUsageLines(lines).filter(entry => !Number.isFinite(entry.timestamp) || entry.timestamp >= cutoff);
       if (entries.length >= limit || start === 0 || windowBytes >= maxWindowBytes) return entries.slice(-limit);
       windowBytes = Math.min(maxWindowBytes, windowBytes * 4);
     }

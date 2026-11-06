@@ -231,6 +231,13 @@ upgrade and restart that proxy before retrying. Resetting a manual model price a
 model, preserving other rates saved independently.
 The **Usage** summary and Models/Providers tables show end-to-end output throughput from usage history for the selected range and filters: summed output tokens divided by summed wall-clock seconds, not an average of individual rates. The sample count is measured attempts (or requests for legacy rows without attempts); samples lacking positive finite output tokens or duration are excluded. An em dash means no sample qualified or the server returned an unusable rate. This includes pre-decode waiting and is not estimated decode speed.
 
+Detailed request usage is available for the most recent seven days. Older usage remains available
+as daily numeric totals, with cost frozen when that history is compacted. The Usage API reports the
+detail start, historical granularity, timezone and cost policy in its `history` metadata. The chart
+shows at most 366 days; lifetime totals are not capped. Custom ranges that include compacted history
+must use complete reporting-day boundaries. The legacy `usageLedgerMaxBytes` setting does not control
+this retention or delete those totals.
+
 The **Usage** Models and Providers tables show the estimated priced portion for each row. Requests
 without a matching price or usable usage are counted as excluded beside that amount when the proxy
 reports pricing coverage fields. Usage that was only partly measured (`unreported` or `unsupported`)

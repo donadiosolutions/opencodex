@@ -4017,6 +4017,8 @@ export const fr: Record<TKey, string> = {
   "usage.range.required": "Saisissez la date et l’heure de début et de fin.",
   "usage.range.invalid": "Saisissez des dates et heures locales valides à partir du 1970-01-01 UTC.",
   "usage.range.reversed": "La fin doit être égale ou postérieure au début.",
+  "usage.range.historicalDailyPrecisionRequired": "Pour les dates antérieures à la consolidation, choisissez des journées locales complètes (début à 00:00 et fin à 23:59).",
+  "usage.historyRetention": "Les détails d’utilisation sont conservés pendant {days} jours. L’historique plus ancien apparaît sous forme de résumés quotidiens et ses estimations de coûts sont figées.",
   "usage.range.applied": "Période sélectionnée : {start} – {end} (bornes incluses).",
   "models.pickerOrder.editorHint": "Réordonnez les modèles routés, puis enregistrez le brouillon. Les lignes mises en avant sont fixes ; les modèles natifs ne sont pas affichés.",
   "models.pickerOrder.nativeLocked": "Cet ordre contient des modèles natifs. Appliquez un préréglage de routage ou Par défaut avant de le personnaliser.",

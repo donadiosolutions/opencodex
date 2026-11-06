@@ -15,6 +15,7 @@ import {
   type UsageLogRevision,
 } from "../../usage/log";
 import { HISTORY_DDL, HISTORY_META_KEYS, HISTORY_SCHEMA_VERSION } from "./schema";
+import { usageDetailCutoff } from "../../usage/retention-contract";
 
 export const REQUEST_HISTORY_INSERT_BATCH = 500;
 export const REQUEST_HISTORY_READ_CHUNK_BYTES = 64 * 1024;
@@ -162,6 +163,8 @@ export interface IngestOptions {
    * recorded and the next refresh picks up later appends as a tail.
    */
   endOffset?: number;
+  /** Explicit clock seam for deterministic retention tests. */
+  now?: number;
 }
 
 export function ingestSourceTail(
@@ -186,7 +189,8 @@ export function ingestSourceTail(
     };
     const ingestLine = (line: Buffer) => {
       const entry = parsedEntryFromLine(line.toString("utf-8"));
-      if (!entry) return;
+      if (!entry || (entry as PersistedUsageEntry & { kind?: string }).kind === "usage-rollup"
+        || entry.timestamp < usageDetailCutoff(options.now)) return;
       pending.push(extractRow(entry));
       if (pending.length >= REQUEST_HISTORY_INSERT_BATCH) commitBatch();
     };
