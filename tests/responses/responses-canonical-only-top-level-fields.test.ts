@@ -64,14 +64,11 @@ test("a destination OpenCodex does not operate never receives access_programs", 
   }
 });
 
-test("an OpenAI-operated destination keeps access_programs", () => {
-  // The canonical ChatGPT surface is where the field means something. The official API is included
-  // because `src/server/responses/compact.ts` spreads the raw body into the native compact request
-  // for exactly this set of destinations without passing through this adapter: stripping here and
-  // not there would make one provider behave differently on two endpoints.
-  for (const provider of [CANONICAL_FORWARD, OPENAI_API_KEY]) {
-    expect(sentBody(provider, codexBody()).access_programs).toEqual({ cyber: "standard" });
-  }
+test("only the canonical ChatGPT destination keeps access_programs", () => {
+  // Access-program selection belongs to ChatGPT account auth. The public API
+  // uses its own credentials and must not receive the caller's private selector.
+  expect(sentBody(CANONICAL_FORWARD, codexBody()).access_programs).toEqual({ cyber: "standard" });
+  expect(sentBody(OPENAI_API_KEY, codexBody())).not.toHaveProperty("access_programs");
 });
 
 test("stripping does not mutate the caller-owned raw body", () => {
