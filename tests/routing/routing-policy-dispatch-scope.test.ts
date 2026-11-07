@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { OcxConfig, OcxUsage } from "../../src/types";
+import type { OcxConfig, OcxParsedRequest, OcxUsage } from "../../src/types";
 import { createTranslatorBudget } from "../../src/lib/translator-budget";
 import { handleResponsesWithPolicyFallback, type PolicyFallbackDeps } from "../../src/server/responses/policy-fallback";
 import { prepareResponsesRequest } from "../../src/server/responses/request-prepare";
@@ -15,6 +15,7 @@ import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { routeModel } from "../../src/router";
 import { PolicyCandidateUnavailableError, policyCandidateRefusalResponse } from "../../src/server/responses/policy-request-scope";
+import { encryptedInput } from "../helpers/agent-task-recovery";
 
 const originalFetch = globalThis.fetch;
 let home: string;
@@ -60,7 +61,7 @@ function configFor(ids = ["a", "b", "c", "d"]): OcxConfig {
 /** Exercise the real parser, route selection, subagent recovery, normalization and auth preparation.
  * Only physical dispatch is replaced, so no fixture can fall through to a real provider. */
 async function execute(config: OcxConfig, options: {
-  spawn?: boolean; failures?: number; selector?: string;
+  spawn?: boolean; failures?: number; selector?: string; input?: unknown;
   onDispatch?: (context: RequestLogContext) => void;
 } = {}) {
   const destinations: string[] = [];
@@ -98,7 +99,7 @@ async function execute(config: OcxConfig, options: {
   };
   const response = await handleResponsesWithPolicyFallback(new Request("http://localhost/v1/responses", {
     method: "POST", headers: { "content-type": "application/json", ...(options.spawn ? { "x-openai-subagent": "collab_spawn" } : {}) },
-    body: JSON.stringify({ model: options.selector ?? "policy/daily", input: "hello", stream: false }),
+    body: JSON.stringify({ model: options.selector ?? "policy/daily", input: options.input ?? "hello", stream: false }),
   }), config, log, {}, { runCore });
   return { response, destinations, selectors, log, scopes, comboDispatches, routeKinds };
 }
@@ -149,12 +150,27 @@ describe("policy scope through real request preparation", () => {
       return { from, to: "outside/model" };
     });
     restoreSpies.push(() => fallback.mockRestore());
+    let assertRecovery = (): void => {};
     if (stage === "recovery") {
       config.agentTaskRecovery = { enabled: true };
-      const recovered = spyOn(recovery, "restoreCachedEncryptedAgentTasks").mockReturnValue(1);
-      restoreSpies.push(() => recovered.mockRestore());
+      const assignment = "Inspect the selected policy without changing its eligibility.";
+      const recovered = spyOn(recovery, "recoverEncryptedAgentTaskForDelivery").mockImplementation(async (_req, input) => {
+        (input as unknown[]).splice(0, 1, { type: "message", role: "user", content: [{ type: "input_text", text: assignment }] });
+        return { recovered: true, assignmentBytes: Buffer.byteLength(assignment), assignmentFingerprint: "fixture", cacheKey: "fixture" };
+      });
+      const verified = spyOn(recovery, "verifyRecoveredAgentTaskDelivery").mockImplementation(value => {
+        const message = (value as OcxParsedRequest).context.messages.at(-1);
+        return message?.role === "user" && message.content === assignment;
+      });
+      restoreSpies.push(() => recovered.mockRestore(), () => verified.mockRestore());
+      assertRecovery = () => {
+        expect(recovered).toHaveBeenCalledTimes(2);
+        expect(verified).toHaveBeenCalledTimes(2);
+        expect(fallback.mock.calls.length).toBeGreaterThanOrEqual(2);
+      };
     }
-    const result = await execute(config, { spawn: true, failures: 0 });
+    const result = await execute(config, { spawn: true, failures: 0, input: stage === "recovery" ? encryptedInput() : undefined });
+    assertRecovery();
     expect(result.response.status).toBe(200);
     expect(result.destinations).toEqual(["b/model"]);
     expect(result.log.routeDecision?.routeKind).toBe("policy");

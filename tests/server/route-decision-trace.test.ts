@@ -286,10 +286,11 @@ describe("route decision traces (RI-01)", () => {
 
   test("startup hydration reads trace-sized usage rows", () => {
     const trace = oversizedTrace();
+    const now = Date.now();
     for (let index = 0; index < 20; index++) {
       appendUsageEntry({
         requestId: `big-${index}`,
-        timestamp: 1_700_000_000_000 + index,
+        timestamp: now,
         provider: "a",
         model: "m1",
         status: 200,
@@ -298,7 +299,7 @@ describe("route decision traces (RI-01)", () => {
         routeDecision: trace,
       });
     }
-    const entries = readRecentUsageEntries(20);
+    const entries = readRecentUsageEntries(20, undefined, { now });
     expect(entries.length).toBe(20);
     expect(entries.every(entry => entry.routeDecision?.routeKind === "combo")).toBe(true);
   });
