@@ -13,7 +13,7 @@ review and merge policy.
 The table describes project responsibilities. Actual repository permissions remain controlled
 through GitHub repository settings.
 
-`dev` is the only integration line. The former `dev2-go` carry duty is retired;
+Upstream `dev` is the only integration line. The former `dev2-go` carry duty is retired;
 see [The retired `dev2-go` line](#the-retired-dev2-go-line).
 
 ## Former maintainers
@@ -29,7 +29,9 @@ when a maintainer steps down.
 ## Review and merge policy
 
 - Pull requests target `dev`. It is the only integration line, and promotion to
-  `main` happens only from `dev`. The target-branch check accepts `dev` alone.
+  `main` happens only from `dev`. The target-branch check accepts `dev` alone
+  upstream; `donadiosolutions/opencodex` also accepts its `custom` integration
+  branch for fork changes.
 - The **`enforce-target`** CI check rejects pull requests whose head
   ancestry sits on the **`main`** tip while far behind **`dev`**, and rejects
   empty, thin, or malformed descriptions; PRs that change files under `gui/`

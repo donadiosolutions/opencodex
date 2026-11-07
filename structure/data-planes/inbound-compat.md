@@ -544,7 +544,6 @@ onto it. Dropping it let a provider default re-enable reasoning the caller had
 explicitly turned off, which is not neutral for the Anthropic families that think by
 default and require an explicit `thinking:{type:"disabled"}` to stop.
 
-
 ## Media at the Chat translation boundary
 
 The native Chat path retains provider-native file/audio blocks. When a request instead needs
@@ -564,13 +563,9 @@ admission follows the [registry contract](../adapters/registry.md#untranslated-i
 The opposite Responses-to-Chat direction supports inline WAV/MP3 audio under the same
 contract; this Chat-to-Responses projection still has no lossless audio carrier.
 Canonical Responses identity sanitation removes top-level `user` and `safety_identifier` only at the strict ChatGPT Codex destination; narrowly scoped pre-output combo recovery follows [request-local target compatibility](../runtime.md#request-local-target-compatibility), and other adapter contracts remain unchanged.
-
 Shared response-log retention and native SSE inspection pacing follow the [bounded inspection contract](../transports/byte-accounting.md#response-log-inspection); other subsystem behavior remains unchanged.
-
 Native steering retains fixed phase deadlines and reconciled replay output; see the [steering stability contract](../transports/streaming-health.md#steering-deadlines-and-replay-completeness).
-
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](../transports/streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
-
 Unicode pattern normalization uses [copy-on-write traversal](../transports/byte-accounting.md#unicode-pattern-normalization) while preserving the existing schema and wire semantics.
 
 Dashboard Fast-row persistence and client refresh follow the [Fast selector rows setting contract](../gui-and-management-api.md#fast-selector-rows-setting).

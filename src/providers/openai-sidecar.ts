@@ -159,9 +159,10 @@ export function resolveCallerOwnedOpenAiSidecar(
     throw error;
   }
   if (!hasCallerCodexBearer(incomingHeaders)) return undefined;
-  const headers = directSidecarHeaders(incomingHeaders, options.codexAuthPolicy ?? config, options.admission);
+  const authContext: CodexAuthContext = { kind: "main", accountId: null };
+  const headers = directSidecarHeaders(incomingHeaders, options.codexAuthPolicy ?? config, authContext, undefined, options.admission);
   if (!headers) return undefined;
-  return { ...candidate, authContext: { kind: "main", accountId: null }, headers };
+  return { ...candidate, authContext, headers };
 }
 
 export async function resolveFirstUsableOpenAiSidecar(

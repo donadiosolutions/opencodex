@@ -1,11 +1,8 @@
 # Docs And Release
-
 The activation scheduling contract is covered by `tests/codex-integration/codex-quota-auto-refresh.test.ts`, including restart recovery and bounded retries. See the [quota activation contract](../providers/openai-tiers.md#public-provider-contract). `.github/workflows/catalog-async-contracts.yml` runs portable Rust-owned Bun catalog contracts on Linux, macOS and Windows for runtime, fixture or dependency changes on pushes to `dev`/`main`/`preview`, pull requests or manual dispatch. It has read-only permissions and no release effect.
-
 Automatic package-tree restart holds a releasable data-plane drain until its scheduled
 service-home check succeeds. A veto releases that fence; a committed shutdown uses the
 permanent drain latch.
-
 macOS shards and control use the shared fresh-process batch runner described below.
 `scripts/ci/sample-macos-stall.sh` remains a standalone diagnostic helper with isolated
 observer regression coverage; it is not wired into those bounded batch steps. It samples
@@ -13,41 +10,27 @@ only a single identified direct Bun child after silence and cleans up only its o
 diagnostic children. Process inventories emit executable basenames; command stdout/stderr
 and stack reports redact literal home/workspace prefixes before capped emission. The
 catalog picker fixture retains CI-only phase boundaries.
-
 Native steering follows [the shared WebSocket contract](../transports/streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
-
 Catalog HTTP acquisition follows the [proxy-routing contract](../catalog.md#remote-catalog-http-proxy-routing).
-
 Refresh-lock validation covers fresh unreadable locks, descriptor-matched release, path-probe failures preserving callback outcomes, and confirmed-owner unlink error handling in `tests/codex-integration/codex-account-store.test.ts`; the [catalog contract](../catalog.md#accounts-namespaces-and-pool-rotation) explicitly does not promise atomic compare-and-delete. Cooperating lock metadata changes serialize through the existing SQLite mutation transaction; release keeps the descriptor open through identity comparison and any unlink, then closes it. Failed metadata writes remove only a matching owned path after successful coordination; unknown identity, failed probes or unavailable coordination retain the path for stale recovery. Async refresh work holds no metadata transaction.
-
 The CLI documents explicit Windows x64 installation observation separately from updates; observation never grants installation authority. See the [read-only observation contract](../runtime.md#explicit-codex-cli-installation-observation).
-
 The configuration-only [plaintext V2 contract](../subagents.md#plaintext-v2-agent-messages) is scoped to canonical ChatGPT Responses forwarding; other source-area behavior described here is unchanged. CLI installation inspection reason codes, including Windows deferral, follow the [runtime inspection contract](../runtime.md#lifecycle).
-
 Shared parsing and streaming follow the [request-copy](../transports/byte-accounting.md#request-copy-accounting) and [stream-buffer accounting](../transports/byte-accounting.md#stream-buffer-accounting) contracts.
-
 Human-readable connect and sync-refresh diagnostics follow the [terminal rendering contract](../runtime.md#cli-readiness-diagnostics), with regression coverage for both paths in `tests/cli/cli-connect-readiness.test.ts`.
-
 `tests/cli/cli-config-default-show.test.ts` covers optional-show parsing, offline display and explicit-action preservation; `tests/cli/cli-config-show-client.test.ts` covers the separate read-only config annotation path:
 `src/cli/config-command.ts` derives token ownership without importing the connect command or
 triggering catalog, lifecycle, or ACL-hardening work.
-
 The CLI default dashboard address follows the [management ingress bind](../runtime.md#hub-management-dashboard-address), covered by `tests/cli/cli-dispatch.test.ts`.
-
 Native main reauthentication follows the [CLI JSON output contract](../runtime.md#native-main-reauth-json-output).
-
 The Codex restart command follows the [CLI restart scope contract](../runtime.md#cli-codex-restart-scope).
-
 The account reference documents the [Orca source-owned import](../codex-home.md#orca-source-owned-account-import).
 Its local-only command is declared in `src/cli/capabilities.ts`, and the generated skill surface
 lists its required source/registry paths and preview/apply flags. The index and domain chapters follow the [CLI reference generation contract](../cli-management.md#generated-operating-reference).
-
 Local validation follows [the contributor test policy](../../AGENTS.md#commands): run the
 suite by default, with a documented resource exception requiring focused regression tests.
 `scripts/setup-hooks.ts` retires only an exact match for the old managed pre-push and
 post-merge shims; custom hooks are preserved. Required current-head CI and
 security review remain merge requirements.
-
 The gate preserves legacy checklist bodies and asks the author to update the first item,
 clear all four boxes and save, then wait for the bot to record that checkpoint before
 validating the displayed head and ticking all four boxes again. Wording-only edits do not
@@ -61,13 +44,10 @@ updates to the outer comment do not move this fence. Equal-second saves require 
 body edit. While re-attestation is pending, the quality check fails explicitly and defers
 ordinary quality evaluation; it does not report a green gate. Before ready, the gate re-reads the PR and persisted attestation. These reads do
 not make GitHub's later ready mutation atomic with concurrent edits or pushes.
-
 ## Public docs
-
 The provider configuration reference and provider guide own the public Google tool-schema policy:
 the persisted values/default, initial refusal, non-direct repair withholding, direct no-repair
 behavior, and content-free diagnostics. English and all translated copies change together.
-
 The public documentation site lives in `docs-site/` and is built with Astro + Starlight. English is
 served at the site root, with French under `/fr`, Korean under `/ko`, Simplified Chinese under `/zh-cn`, Traditional Chinese under `/zh-tw`, Russian under `/ru`, Japanese under `/ja`, and Turkish under `/tr`. `docs-site/astro.config.mjs` is the locale source of truth.
 
@@ -598,3 +578,21 @@ Universal macOS release builds install both aarch64-apple-darwin and x86_64-appl
 The existing `codex-routing`, `codex-auth-context` and `codex-quota-prime` tests cover [priority failback](../providers/openai-accounts.md#ongoing-priority-failback), including cache-default retention, stale evidence, main fencing and failed-attempt cadence.
 
 Automatic account exhaustion and recovery use the [spendable Codex credit evidence contract](../providers/openai-tiers.md#spendable-codex-credits), including independent freshness, upstream refusal, and reset-ticket separation.
+
+## Numbered fork images
+
+In the donadiosolutions fork, `.github/workflows/bcdn-release.yml` accepts a
+same-repository branch (default `custom`) only from the default branch workflow.
+It resolves that branch once and fetches official upstream tags into an isolated
+namespace to identify the nearest reachable version. An annotated tag reserves
+`<upstream-tag>-bcdnNN`, using the numeric maximum across tags and releases plus
+one. The reservation records the source and workflow commits and run ID; reruns
+reuse it even after the branch moves. A failed build retains its tag and draft.
+
+`.github/workflows/bcdn-image.yml` builds and verifies the reserved Linux/amd64
+image, producing runtime SBOMs, a separate build inventory, signatures and
+provenance. The release publishes after verification with its evidence assets.
+Only successful `custom` releases promote the verified digest to `latest`;
+serialized promotion preserves newer custom releases during an older rerun.
+The application retains its upstream version. Package visibility is preserved,
+and this workflow has no deployment effect.

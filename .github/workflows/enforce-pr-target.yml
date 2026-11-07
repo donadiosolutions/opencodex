@@ -194,10 +194,10 @@ jobs:
           # The branch is chosen, not fixed. `status` has no pull_request
           # payload and runs the privileged workflow from the repository
           # default branch, so it sources from that same promoted boundary. A
-          # `main`-targeting PR must take its scripts from `main`, or the gate
-          # runs a `main` workflow definition against `dev` scripts. Every
-          # other base, including a stacked child's, resolves to `dev`.
-          ref: ${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}
+          # `main`-targeting PR must take its scripts from `main`. The
+          # donadiosolutions fork also trusts its `custom` integration branch;
+          # other bases, including stacked children, resolve to `dev`.
+          ref: ${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || (github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev')) }}
           persist-credentials: false
           sparse-checkout: |
             .github/scripts
@@ -296,8 +296,10 @@ jobs:
               ),
             );
 
+            const forkIntegration = context.repo.owner === "donadiosolutions" && context.repo.repo === "opencodex";
             const ALLOWED_BASES = ["dev"];
-            const DEFAULT_BASE = "dev";
+            if (forkIntegration) ALLOWED_BASES.push("custom");
+            const DEFAULT_BASE = forkIntegration ? "custom" : "dev";
             const TITLE_PREFIX = "[WRONG BRANCH] ";
             const LEGACY_COMMENT_MARKER = "<!-- wrong-branch-enforcer -->";
             const REVIEW_READY_LABEL = "review-ready";

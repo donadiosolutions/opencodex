@@ -1279,9 +1279,10 @@ describe("GitHub Actions hardening", () => {
       // pull_request payload and loads scripts from the default-branch trust
       // boundary that owns the event; a `main`-targeting PR loads from `main`
       // so the scripts match the workflow definition `pull_request_target`
-      // itself loaded; everything else resolves to `dev`.
+      // itself loaded; the donadiosolutions fork's `custom` target uses
+      // `custom`, and everything else resolves to `dev`.
       ref:
-        "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
+        "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || (github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev')) }}",
       "persist-credentials": false,
       // MAINTAINERS.md rides along so the completion ping reads the canonical
       // maintainer list from the same trusted base revision as the scripts.
@@ -1365,7 +1366,9 @@ describe("GitHub Actions hardening", () => {
     // not just by shape: a widened list is the one edit that opens every base
     // at once while every behavioural scenario below still passes.
     expect(script).toMatch(/const ALLOWED_BASES = \["dev"\];/);
-    expect(script).toMatch(/const DEFAULT_BASE = "dev";/);
+    expect(script).toMatch(/const forkIntegration = context\.repo\.owner === "donadiosolutions" && context\.repo\.repo === "opencodex";/);
+    expect(script).toMatch(/if \(forkIntegration\) ALLOWED_BASES\.push\("custom"\);/);
+    expect(script).toMatch(/const DEFAULT_BASE = forkIntegration \? "custom" : "dev";/);
 
     // The read-only resolver is the single authority for PR identity. The
     // write job consumes exactly that output, so its mutation target and

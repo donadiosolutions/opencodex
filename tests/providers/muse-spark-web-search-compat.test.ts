@@ -311,7 +311,7 @@ describe("default Muse Spark direct Meta web_search", () => {
     const body = buildForProvider(provider, "muse-spark-1.3", rawBody);
     const expected = { type: "web_search", search_context_size: "medium" };
     expect(toolsOf(body)[0]).toEqual(expected);
-    expect((body.input as Array<{ tools: unknown[] }>)[0]!.tools[0]).toEqual(expected);
+    expect(body.input).toEqual([]);
     expect(toolsOf(body)[1]).toEqual({ ...webSearchTool(), type: "web_search_preview" });
     expect(rawBody).toEqual(before);
   });
