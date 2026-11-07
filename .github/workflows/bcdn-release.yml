@@ -69,6 +69,20 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Recheck release actors before publication
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const repo = { owner: 'donadiosolutions', repo: 'opencodex' };
+            for (const username of new Set([context.actor, process.env.TRIGGERING_ACTOR])) {
+              if (!username) throw new Error('Missing release actor');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
+              if (![data.permission, data.role_name].some(role => ['maintain', 'admin'].includes(role))) {
+                throw new Error('Release actor requires maintain or admin access');
+              }
+            }
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.workflow_sha }}
@@ -100,6 +114,20 @@ jobs:
       contents: read
       packages: write
     steps:
+      - name: Recheck release actors before publication
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const repo = { owner: 'donadiosolutions', repo: 'opencodex' };
+            for (const username of new Set([context.actor, process.env.TRIGGERING_ACTOR])) {
+              if (!username) throw new Error('Missing release actor');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
+              if (![data.permission, data.role_name].some(role => ['maintain', 'admin'].includes(role))) {
+                throw new Error('Release actor requires maintain or admin access');
+              }
+            }
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.workflow_sha }}
