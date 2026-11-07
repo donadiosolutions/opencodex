@@ -5,6 +5,8 @@ request-owned (`codexRouteCredentialOwnership` in `src/server/responses/core-aut
 bearer makes main an ordinary Pool candidate next to the stored accounts, while a stored-account pick is
 served from that account's stored credential. This document owns how such a request may keep one account
 per conversation, and how every affinity decision reports whether a binding was actually stored (#8080).
+Ingress retains a captured caller Direct bearer across a headerless internal request rebuild; final route
+validation still determines whether it is request-owned, even when a stored main bearer was also injected.
 
 ## Ownership invariant
 
