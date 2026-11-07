@@ -17,6 +17,21 @@ import { mergeModelCapabilities, modelCapabilitiesConfigError } from "../../src/
 let home = "";
 let previousHome: string | undefined;
 
+test("Hub entitlement version is independent of CLI inventory and validated on writes", () => {
+  const config = { ...getDefaultConfig(), runtimeRole: "hub", codexEntitlementClientVersion: "0.167.0-alpha.3.2" };
+  expect(validateConfigCandidate(config).ok).toBe(true);
+  for (const version of ["0.0.0", "0.0.0-dev", "latest", "0.167.0\nother", 167, "1".repeat(65)]) {
+    const result = validateConfigCandidate({ ...config, codexEntitlementClientVersion: version });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error).toContain("codexEntitlementClientVersion");
+  }
+  expect(validateConfigCandidate({ ...config, runtimeRole: "standalone" }).ok).toBe(false);
+  writeFileSync(getConfigPath(), JSON.stringify({ ...config, codexEntitlementClientVersion: "invalid" }));
+  const degraded = loadConfig();
+  expect(degraded.runtimeRole).toBe("hub");
+  expect(degraded.codexEntitlementClientVersion).toBeUndefined();
+});
+
 beforeEach(() => {
   previousHome = process.env.OPENCODEX_HOME;
   home = mkdtempSync(join(tmpdir(), "ocx-display-names-config-"));

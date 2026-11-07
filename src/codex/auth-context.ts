@@ -70,6 +70,7 @@ import {
   isCodexModelEntitlementSnapshotCurrent,
   isDirectCallerEntitledToCodexModel,
   isDirectCallerEntitledToCodexUltrafast,
+  resolveCodexEntitlementClientVersion,
   resolveCodexModelEntitlements,
 } from "./model-entitlements";
 import { ACCOUNT_GATED_NATIVE_OPENAI_MODELS, NATIVE_RESERVE_MODEL } from "./catalog/native-models";
@@ -596,7 +597,7 @@ export class CodexRecoveryWithheldError extends CodexAccountCooldownError {
 
 export type CodexAuthPolicyConfig = Readonly<Pick<OcxConfig,
   "codexMainAccountHardLock" | "codexMainAccountHardLockThresholds" | "codexDesktopAuthless" | "runtimeRole" | "pausedCodexAccountIds"
-  | "creditCodexAccountIds" | "codexAccounts" | "codexUseRemainingQuotaAccountIds"
+  | "creditCodexAccountIds" | "codexAccounts" | "codexUseRemainingQuotaAccountIds" | "codexEntitlementClientVersion"
 >>;
 
 interface CodexAuthMaterializationOptions {
@@ -996,9 +997,9 @@ export interface ResolveCodexAuthContextOptions {
   /** A validated native Codex bearer may serve this request without entering Pool state. */
   requestScopedMainCredential?: boolean;
   /** Test seam for a Direct request's own forwarded ChatGPT credential. */
-  isDirectCallerEntitledToCodexModel?: (headers: Headers, modelId: string) => Promise<boolean>;
+  isDirectCallerEntitledToCodexModel?: typeof isDirectCallerEntitledToCodexModel;
   /** Test seam for the request-owned credential's authenticated Ultrafast roster. */
-  isDirectCallerEntitledToCodexUltrafast?: (headers: Headers, modelId: string) => Promise<boolean>;
+  isDirectCallerEntitledToCodexUltrafast?: typeof isDirectCallerEntitledToCodexUltrafast;
   /**
    * This request's conversation carries live uploaded-file references (#4778). Retains the bound
    * account across a VOLUNTARY quota move; involuntary release is untouched.
@@ -1117,6 +1118,8 @@ async function resolveCodexAuthContextUnannotated(
     pinned: config.activeCodexAccountPinned,
   };
   const policy = options.codexAuthPolicy ?? config;
+  const entitlementConfig = { ...config, runtimeRole: policy.runtimeRole, codexEntitlementClientVersion: policy.codexEntitlementClientVersion };
+  const clientVersion = resolveCodexEntitlementClientVersion(null, undefined, { config: policy });
   const requestScopedMainCredential = options.requestScopedMainCredential === true
     && hasCallerCodexBearer(headers);
   const reserve = requiresReserveAuthorization(policy, options.modelId, options.admission);
@@ -1128,7 +1131,7 @@ async function resolveCodexAuthContextUnannotated(
   const ultrafastRequested = canonicalFastTierMarker(options.serviceTier) === "ultrafast" && options.modelId !== undefined;
   const callerHasUltrafast = async (): Promise<boolean> => !ultrafastRequested || await (
     options.isDirectCallerEntitledToCodexUltrafast ?? isDirectCallerEntitledToCodexUltrafast
-  )(headers, options.modelId!);
+  )(headers, options.modelId!, { clientVersion });
   const unsupportedTier = () => new CodexModelAvailabilityError(
     "unsupported", "The selected ChatGPT account does not support Ultrafast for this model",
   );
@@ -1180,7 +1183,7 @@ async function resolveCodexAuthContextUnannotated(
       if (options.modelId && ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)) {
         const entitled = await (
           options.isDirectCallerEntitledToCodexModel ?? isDirectCallerEntitledToCodexModel
-        )(headers, options.modelId);
+        )(headers, options.modelId, { clientVersion });
         if (!entitled) {
           throw new CodexModelAvailabilityError(
             "unsupported",
@@ -1221,8 +1224,8 @@ async function resolveCodexAuthContextUnannotated(
       }
       assertMainAccountPolicy(policy);
       if (options.modelId && (ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId) || ultrafastRequested)) {
-        const snapshot = await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config, {
-            signal: options.signal,
+        const snapshot = await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(entitlementConfig, {
+            signal: options.signal, clientVersion,
             nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
           });
         if (ultrafastRequested && !isCodexModelEntitlementSnapshotCurrent(snapshot)) {
@@ -1261,7 +1264,7 @@ async function resolveCodexAuthContextUnannotated(
       || ((!ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId)
         || await (
         options.isDirectCallerEntitledToCodexModel ?? isDirectCallerEntitledToCodexModel
-      )(headers, options.modelId)) && await callerHasUltrafast());
+      )(headers, options.modelId, { clientVersion })) && await callerHasUltrafast());
     if (callerEntitled && preserveRequestOwnedMainPin()) {
       const context: CodexAuthContext = { kind: "main", accountId: null, ...(mode === "pool" && conversationStateKey ? { conversationStateKey } : {}) };
       selectedCallerMainContexts.add(context);
@@ -1354,9 +1357,9 @@ async function resolveCodexAuthContextUnannotated(
       : undefined;
     const mainModelGrantUnobserved = excludeAccountIds?.has(MAIN_CODEX_ACCOUNT_ID) === true;
     const entitlementSnapshot = options.modelId && (ACCOUNT_GATED_NATIVE_OPENAI_MODELS.has(options.modelId) || ultrafastRequested)
-      ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(config, {
+      ? await (options.resolveCodexModelEntitlements ?? resolveCodexModelEntitlements)(entitlementConfig, {
         excludeAccountIds,
-        signal: options.signal,
+        signal: options.signal, clientVersion,
         nativeMainRefreshDependencies: options.nativeMainRefreshDependencies,
       })
       : undefined;

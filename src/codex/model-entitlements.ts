@@ -32,6 +32,11 @@ import {
   setObservedDenialGenerationCheck,
   resetObservedCodexModelDenialsForTests,
 } from "./observed-model-denials";
+import { isUsableCodexClientVersion } from "./entitlement-client-version";
+export { isUsableCodexClientVersion } from "./entitlement-client-version";
+
+export type CodexEntitlementConfig = Pick<OcxConfig,
+  "codexAccounts" | "runtimeRole" | "codexEntitlementClientVersion">;
 
 const CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
 
@@ -48,22 +53,6 @@ const CODEX_MODELS_ENDPOINT = "https://chatgpt.com/backend-api/codex/models";
  */
 function codexModelsUrl(clientVersion: string): string {
   return `${CODEX_MODELS_ENDPOINT}?client_version=${encodeURIComponent(clientVersion)}`;
-}
-
-/** A version string upstream can filter on. Rejects empty and the `0.0.0` placeholder. */
-export function isUsableCodexClientVersion(value: string | null | undefined): value is string {
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed === "0.0.0") return false;
-  // Bounded: the value reaches an outbound URL, and no real client version is this long.
-  if (trimmed.length > 64) return false;
-  if (!/^\d+(\.\d+)*([-+][0-9A-Za-z.-]+)?$/.test(trimmed)) return false;
-  // An all-zero numeric core is the same claim `0.0.0` makes — a client predating every gated
-  // model — so `0`, `0.0`, `00.0.0`, and `0.0.0-dev` must fail for the same reason, by value
-  // rather than by exact string.
-  const core = trimmed.split(/[-+]/, 1)[0]!;
-  if (core.split(".").every(segment => Number(segment) === 0)) return false;
-  return true;
 }
 
 /**
@@ -194,22 +183,24 @@ function compareClientVersions(left: string, right: string): number {
  *
  * 1. the inbound request's own `client_version` — the only value certainly describing the
  *    client being answered;
-* 2. the selected Codex runtime version, for callers with no request of their own — but never
+ * 2. the explicitly configured Hub entitlement query version when running as a Hub. This
+ *    is protocol configuration, never installed-runtime evidence or an entitlement grant;
+ * 3. the selected Codex runtime version, for callers with no request of their own — but never
  *    below `GATED_MODEL_CLIENT_VERSION_FLOOR`. Retained sync refreshes runtime evidence before
  *    discovery, which is what makes this usable here; the persisted file itself carries no
  *    freshness guarantee.
- * 3. the floor this build's own bundled roster records for the models being gated
+ * 4. the floor this build's own bundled roster records for the models being gated
  *    (`GATED_MODEL_CLIENT_VERSION_FLOOR`).
  *
- * Tier 3 exists because background catalog sync has no request and, on a host where Codex
- * has never been resolved, no persisted runtime either — yet it is exactly the path that
+ * The final fallback exists because background catalog sync has no request and, on a host
+ * where Codex has never been resolved, no persisted runtime either — yet it is exactly the path that
  * publishes account-confirmed native rows. Skipping discovery there suppressed the rows this
  * fix is meant to restore. The floor is not invented: it is the version this build's own
  * snapshot states the gated models require, so asking under it is the narrowest question
  * that can still return them.
  *
- * The floor binds tier 2 as well, and that is the whole of #3436. #3022 gave tier 3 the
- * measured minimum but left tier 2 to speak for itself, so a host whose persisted runtime was
+ * The floor binds the runtime fallback as well (#3436). #3022 gave runtime-less callers the
+ * measured minimum but left the selected runtime to speak for itself, so a persisted runtime
  * REAL but OLD — 0.141.0 against a measured 0.144.0 — asked upstream under a version upstream
  * filters on, got an honest roster with no gpt-5.6, and lost sol/terra/luna everywhere. That
  * made an outdated CLI strictly worse than no CLI at all, since the runtime-less host already
@@ -219,10 +210,11 @@ function compareClientVersions(left: string, right: string): number {
  *
  * Which tier answers is a question about WHICH QUESTION IS BEING ASKED, not about background
  * versus request path — `isDirectCallerEntitledToCodexModel` and both authorization paths in
- * `auth-context.ts` are inbound requests that reach tier 2 because they carry no version:
+ * `auth-context.ts` carry no client version and use the Hub query setting or runtime fallback:
  *
  * - No inbound version: the caller is asking whether the ACCOUNT owns the model. Upstream
- *   only incidentally filters that answer by version, so ask at no less than the floor.
+ *   only incidentally filters that answer by version. A Hub can explicitly configure its
+ *   query protocol version; otherwise the runtime fallback asks at no less than the floor.
  * - An inbound version: the caller is asking what THAT CLIENT may use. Answer verbatim, even
  *   when it is older than the floor. Clamping there would advertise rows the client told us
  *   it cannot drive (#2548) and would turn an honest `unknown` into a cached `denied`.
@@ -234,9 +226,17 @@ function compareClientVersions(left: string, right: string): number {
 export function resolveCodexEntitlementClientVersion(
   inbound?: string | null,
   loadRuntime: () => { selectedVersion?: string | null } | null = loadPersistedCodexRuntime,
-  options: { readonly bypassRuntimeMemo?: boolean; readonly now?: number } = {},
+  options: {
+    readonly bypassRuntimeMemo?: boolean;
+    readonly now?: number;
+    readonly config?: Pick<OcxConfig, "runtimeRole" | "codexEntitlementClientVersion">;
+  } = {},
 ): string {
   if (isUsableCodexClientVersion(inbound)) return inbound.trim();
+  const configured = options.config?.codexEntitlementClientVersion;
+  if (options.config?.runtimeRole === "hub" && isUsableCodexClientVersion(configured)) {
+    return configured.trim();
+  }
   // The memo describes the real runtime file, so a caller supplying a different loader is asking
   // a different question and must not be answered from it. Detected rather than left to the
   // caller, because forgetting the flag would silently cross-answer.
@@ -881,7 +881,7 @@ const DISCOVERY_ETAG_MAX_AGE_MS = 24 * 60 * 60 * 1000;
  * entitlement path and, for ungated rows, with the upstream status the request receives.
  */
 export async function discoverCodexNativeRoster(
-  config: Pick<OcxConfig, "codexAccounts">,
+  config: CodexEntitlementConfig,
   options: CodexNativeRosterDiscoveryOptions = {},
 ): Promise<CodexNativeRosterDiscoveryOutcome> {
   const fetcher = options.fetcher ?? fetch;
@@ -1067,7 +1067,7 @@ function admitVersionMiss(
   return admitted;
 }
 
-function candidateAccountIds(config: Pick<OcxConfig, "codexAccounts">): string[] {
+function candidateAccountIds(config: CodexEntitlementConfig): string[] {
   return [
     MAIN_CODEX_ACCOUNT_ID,
     ...(config.codexAccounts ?? [])
@@ -1076,7 +1076,7 @@ function candidateAccountIds(config: Pick<OcxConfig, "codexAccounts">): string[]
   ];
 }
 
-function normalizedCandidateAccountIds(config: Pick<OcxConfig, "codexAccounts">): string[] {
+function normalizedCandidateAccountIds(config: CodexEntitlementConfig): string[] {
   return [...new Set(candidateAccountIds(config))].sort();
 }
 
@@ -1138,7 +1138,7 @@ function entitlementEnsureFlightKey(
 }
 
 async function refreshCodexEntitlementWorkset(
-  config: Pick<OcxConfig, "codexAccounts">,
+  config: CodexEntitlementConfig,
   workset: readonly string[],
   identityVector: ReadonlyMap<string, string | null>,
   clientVersion: string,
@@ -1220,7 +1220,7 @@ function waitForEntitlementEnsureFlight(
  * the cache for the first poll after the shared flight settles.
  */
 export async function ensureCodexEntitlementFreshness(
-  config: Pick<OcxConfig, "codexAccounts">,
+  config: CodexEntitlementConfig,
   options: CodexEntitlementFreshnessOptions = {},
 ): Promise<void> {
   try {
@@ -1228,6 +1228,7 @@ export async function ensureCodexEntitlementFreshness(
     const clientVersion = resolveCodexEntitlementClientVersion(
       options.clientVersion,
       options.loadPersistedRuntime ?? loadPersistedCodexRuntime,
+      { config },
     );
     const candidates = normalizedCandidateAccountIds(config);
     const mutationEpoch = codexCredentialMutationEpoch();
@@ -1282,11 +1283,11 @@ export async function ensureCodexEntitlementFreshness(
 }
 
 export function getCodexModelEntitlementStatus(
-  config: Pick<OcxConfig, "codexAccounts">,
+  config: CodexEntitlementConfig,
   now = Date.now(),
   clientVersion?: string | null,
 ): CodexModelEntitlementStatus {
-  const version = resolveCodexEntitlementClientVersion(clientVersion);
+  const version = resolveCodexEntitlementClientVersion(clientVersion, loadPersistedCodexRuntime, { config });
   const identityOf = credentialIdentityResolver();
   const accounts = candidateAccountIds(config).flatMap(accountId => {
     const credentialIdentity = identityOf(accountId);
@@ -1348,7 +1349,7 @@ export function getCodexModelEntitlementStatus(
  *   pay one bounded discovery call per account; discovery failure temporarily hides the gated row.
  */
 export async function resolveCodexModelEntitlements(
-  config: Pick<OcxConfig, "codexAccounts">,
+  config: CodexEntitlementConfig,
   options: CodexModelEntitlementResolveOptions = {},
 ): Promise<CodexModelEntitlementSnapshot> {
   const now = options.now ?? Date.now();
@@ -1356,6 +1357,7 @@ export async function resolveCodexModelEntitlements(
   const clientVersion = resolveCodexEntitlementClientVersion(
     options.clientVersion,
     options.loadPersistedRuntime ?? loadPersistedCodexRuntime,
+    { config },
   );
   const allowedAccountIds = candidateAccountIds(config)
     .filter(accountId => !options.excludeAccountIds?.has(accountId));
@@ -1378,6 +1380,7 @@ export async function resolveCodexModelEntitlements(
       resolveCodexEntitlementClientVersion(
         null,
         options.loadPersistedRuntime ?? loadPersistedCodexRuntime,
+        { config },
       ),
       options.credentialMutationEpoch,
     ),
@@ -1693,20 +1696,27 @@ export function cachedAvailableAccountGatedNativeModels(
   )));
 }
 
-/** The latest roster for one stored account, projected without I/O to upstream. */
+/** A version-specific roster, or the latest legacy observation, without upstream I/O. */
 export function cachedCodexAccountEntitlements(
   accountId: string,
   now = Date.now(),
+  clientVersion?: string | null,
 ): CodexAccountDisplayEntitlement[] {
   if (accountId.startsWith(DIRECT_CALLER_ACCOUNT_PREFIX)) return [];
   const identity = currentCredentialIdentity(accountId);
   if (!identity) return [];
   let latest: CachedAccountModels | undefined;
-  for (const [key, entry] of accountModelsCache) {
-    if (accountIdOfCacheKey(key) === accountId && entry.credentialIdentity === identity) latest = entry;
+  if (clientVersion !== undefined && clientVersion !== null) {
+    if (!isUsableCodexClientVersion(clientVersion)) return [];
+    const entry = accountModelsCache.get(cacheKeyFor(accountId, clientVersion.trim()));
+    if (entry?.credentialIdentity === identity) latest = entry;
+  } else {
+    for (const [key, entry] of accountModelsCache) {
+      if (accountIdOfCacheKey(key) === accountId && entry.credentialIdentity === identity) latest = entry;
+    }
   }
-  // Map insertion order records the newest observation across client versions. A later failed
-  // or expired observation cannot resurrect an older tier claim from a different version.
+  // Explicit versions answer one protocol question; another version cannot replace its evidence.
+  // Legacy callers retain the latest observation, including a later failed or expired result.
   if (!latest?.confirmed || latest.expiresAt <= now) return [];
   const grants = new Set<CodexAccountDisplayEntitlement>();
   for (const modelId of latest.models) {

@@ -562,6 +562,8 @@ export interface OcxConfig {
   port: number;
   /** Runtime topology role. Absence preserves the historical standalone behavior. */
   runtimeRole?: OcxRuntimeRole;
+  /** Hub entitlement-query version, independent of any locally installed Codex runtime. */
+  codexEntitlementClientVersion?: string;
   /** Hub-only public management metadata. Presence is inert outside the hub role. */
   hub?: OcxHubConfig;
   /** Opt-in remote dashboard issuance policy. Presence is inert outside the hub role. */
