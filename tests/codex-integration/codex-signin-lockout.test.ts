@@ -11,9 +11,10 @@
  * test that needed one running would be testing the wrong state.
  */
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   OCX_ROUTING_MARKER_LINE,
   OCX_SECTION_MARKER,
@@ -141,17 +142,24 @@ describe("a Codex catalog pointer whose file is gone (#5261)", () => {
     `model = "gpt-5.5"\nmodel_catalog_json = ${JSON.stringify(catalogPath)}\n`;
 
   test("an owned catalog that is missing is reported, and one that exists is not", () => {
-    const previous = existsSync(DEFAULT_CATALOG_PATH) ? readFileSync(DEFAULT_CATALOG_PATH) : null;
+    const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-pointer-"));
+    const catalog = join(dir, "opencodex-catalog.json");
+    // Import freshly so the canonical path belongs to this fixture even without preload.
+    const inspect = () => {
+      const module = new URL("../../src/codex/inject/config-toml.ts", import.meta.url).href;
+      const result = spawnSync(process.execPath, ["-e", `
+        import { missingOwnedCatalogPath } from ${JSON.stringify(module)};
+        process.stdout.write(JSON.stringify(missingOwnedCatalogPath(${JSON.stringify(configNaming(catalog))})));
+      `], { env: { ...process.env, CODEX_HOME: dir }, encoding: "utf8", timeout: 10_000 });
+      expect(result.status).toBe(0);
+      return JSON.parse(result.stdout);
+    };
     try {
-      // Only the canonical generated path belongs to us; matching basenames elsewhere do not.
-      if (existsSync(DEFAULT_CATALOG_PATH)) unlinkSync(DEFAULT_CATALOG_PATH);
-      expect(missingOwnedCatalogPath(configNaming(DEFAULT_CATALOG_PATH))).toBe(DEFAULT_CATALOG_PATH);
-      mkdirSync(dirname(DEFAULT_CATALOG_PATH), { recursive: true });
-      writeFileSync(DEFAULT_CATALOG_PATH, "{}");
-      expect(missingOwnedCatalogPath(configNaming(DEFAULT_CATALOG_PATH))).toBeNull();
+      expect(inspect()).toBe(catalog);
+      writeFileSync(catalog, "{}");
+      expect(inspect()).toBeNull();
     } finally {
-      if (previous) writeFileSync(DEFAULT_CATALOG_PATH, previous);
-      else if (existsSync(DEFAULT_CATALOG_PATH)) unlinkSync(DEFAULT_CATALOG_PATH);
+      removeTreeWithRetry(dir);
     }
   });
 
