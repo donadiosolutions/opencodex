@@ -35,7 +35,7 @@ const sidecarAuth = await import("../../src/server/responses/request-sidecar-aut
 mock.module("../../src/server/responses/request-sidecar-auth", () => ({ ...sidecarAuth,
   prepareResponsesSidecarAuth: async () => ({
     routedCompaction: false,
-    openAiSidecar: { releaseProbeLease: () => { released++; } },
+    openAiSearchSidecar: { releaseProbeLease: () => { released++; } },
   }) as Awaited<ReturnType<typeof sidecarAuth.prepareResponsesSidecarAuth>>,
 }));
 const { handleResponses } = await import("../../src/server/responses");
