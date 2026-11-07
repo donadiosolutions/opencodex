@@ -79,12 +79,7 @@ import { isXaiResponsesDestination, resolveProviderTransport } from "../../provi
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import {
-  AnthropicAccountCooldownError,
-  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
-  anthropicRoutingFor,
-  formatAnthropicProviderForLog,
-} from "../../oauth/anthropic-routing";
+import { AnthropicAccountCooldownError, ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, anthropicRoutingFor, formatAnthropicProviderForLog } from "../../oauth/anthropic-routing";
 import {
   isGenericOAuthFailoverEnabled,
   rotateGenericOAuthAccountOn429,
@@ -93,31 +88,17 @@ import {
   failoverAccountSnapshot,
   rotateAntigravityAccountOnAuthRefusal,
 } from "../../oauth/generic-account-failover";
-import {
-  attemptOpaqueBlobRecovery,
-  consoleGoUploadRejectionBody,
-  CONSOLE_GO_UPLOAD_RETRY_DELAY_MS,
-  reasoningEffortRejectionText,
-  anthropicFastRefused,
-} from "./core-opaque-recovery";
+import { attemptOpaqueBlobRecovery, consoleGoUploadRejectionBody, CONSOLE_GO_UPLOAD_RETRY_DELAY_MS, reasoningEffortRejectionText, anthropicFastRefused } from "./core-opaque-recovery";
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
-import {
-  isTransientConsoleGoUploadRejection,
-  enrichOpenCodeZenUpstreamMessage,
-} from "../../providers/opencode-zen-rate-limit";
+import { isTransientConsoleGoUploadRejection, enrichOpenCodeZenUpstreamMessage } from "../../providers/opencode-zen-rate-limit";
 import { planReasoningEffortDowngrade } from "../../providers/reasoning-metadata";
 import { consumeComboFailure } from "./core-combo-failure";
 import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
 import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
-import {
-  isCyberPolicyCode,
-  CYBER_POLICY_FALLBACK_MESSAGE,
-  CYBER_POLICY_ERROR_CODE,
-  SEND_BUDGET_EXHAUSTED_CODE,
-} from "../../lib/errors";
+import { isCyberPolicyCode, CYBER_POLICY_FALLBACK_MESSAGE, CYBER_POLICY_ERROR_CODE, SEND_BUDGET_EXHAUSTED_CODE } from "../../lib/errors";
 import { resolveClientRetryAfter } from "../../lib/retry-after";
 import { cancelBodyOnAbort } from "../../lib/abort";
 import { createCodexAuthDispatchGuard, releaseCodexAuthContextProbeLease, unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
