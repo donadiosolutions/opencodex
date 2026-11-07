@@ -78,6 +78,15 @@ async function reserve({ github, context, core }) {
   if (context.ref !== `refs/heads/${repository.default_branch}` || context.sha !== process.env.GITHUB_WORKFLOW_SHA) {
     throw new Error('Dispatch must use the default branch workflow revision');
   }
+  // Reruns retain the original dispatch actor's privileges. Check both actors
+  // so a writer cannot use an authorized operator's old run to publish.
+  for (const username of new Set([context.actor, process.env.GITHUB_TRIGGERING_ACTOR])) {
+    if (!username) throw new Error('Missing release actor identity');
+    const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
+    if (![data.permission, data.role_name].some(role => ['maintain', 'admin'].includes(role))) {
+      throw new Error('Fork releases require maintain or admin repository access');
+    }
+  }
   const runId = String(context.runId);
   const state = await allState(github, repo);
   let value;
