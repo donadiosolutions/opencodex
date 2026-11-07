@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,10 @@ import { normalizeUsageEntryForTest, readUsageEntries, resetUsageReadCacheForTes
 import { failureSummary } from "../../gui/src/pages/logs-failure-summary";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 import { log } from "../helpers/request-log-entry";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
+
+beforeEach(() => setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS));
+afterEach(() => setUsageDetailNowForTests(undefined));
 
 describe("request log metadata", () => {
   test("direct ingress retains an already normalized row", () => {

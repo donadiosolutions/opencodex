@@ -66,7 +66,7 @@ export function removeAbandonedBuilds(indexPath: string): number {
  * `buildPath`, leave it in WAL mode and close it. Returns the rows ingested.
  * A private build needs no crash durability: an interrupted one is discarded.
  */
-export function buildIndexFile(buildPath: string, reason: string, revision: UsageLogRevision): number {
+export function buildIndexFile(buildPath: string, reason: string, revision: UsageLogRevision, now?: number): number {
   removeBuildFiles(buildPath);
   const build = new Database(buildPath, { create: true, readwrite: true });
   try {
@@ -78,6 +78,7 @@ export function buildIndexFile(buildPath: string, reason: string, revision: Usag
     const inserted = ingestSourceTail(build, revision.path, 0, {
       expected: revision,
       endOffset: Number(revision.size),
+      now,
     });
     // Validate before publication while still off the serving thread. The
     // published handle can then be trusted until its periodic worker check.

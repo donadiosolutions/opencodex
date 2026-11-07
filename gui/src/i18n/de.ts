@@ -4028,6 +4028,8 @@ export const de: Record<TKey, string> = {
   "usage.range.required": "Geben Sie Datum und Uhrzeit für Beginn und Ende ein.",
   "usage.range.invalid": "Geben Sie gültige lokale Daten und Uhrzeiten ab 1970-01-01 UTC ein.",
   "usage.range.reversed": "Das Ende muss auf oder nach dem Beginn liegen.",
+  "usage.range.historicalDailyPrecisionRequired": "Wählen Sie für Zeiträume vor der Verdichtung vollständige lokale Berichtstage (Beginn 00:00, Ende 23:59).",
+  "usage.historyRetention": "Detaillierte Nutzungsdaten werden {days} Tage aufbewahrt. Ältere Verläufe erscheinen als Tagesübersichten; ihre Kostenschätzungen bleiben eingefroren.",
   "usage.range.applied": "Ausgewählter Zeitraum: {start} – {end} (beide Grenzen eingeschlossen).",
   "models.pickerOrder.editorHint": "Routingsmodelle neu ordnen und den Entwurf speichern. Hervorgehobene Zeilen sind fest; native Modelle werden nicht angezeigt.",
   "models.pickerOrder.nativeLocked": "Diese Reihenfolge enthält native Modelle. Vor der Bearbeitung eine Routing-Vorgabe oder Standard anwenden.",

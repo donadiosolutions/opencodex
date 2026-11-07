@@ -424,14 +424,24 @@ are observed before image/search loops or continuation guards combine their usag
 sum the flat attempts by provider/account and do not add the parent combo total again. These
 records identify usage; provider quota percentages remain separate upstream observations.
 
-`GET /api/usage` reads `~/.opencodex/usage.jsonl` from the beginning through the current ledger
-snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact aggregate state rather
-than every normalized request row. Later refreshes validate the previous line boundary and fold only
-newly appended complete rows. Concurrent callers share the same refresh. Range and surface predicates
-are applied to the readable-row aggregate, so the former read-byte window and parsed-row cap cannot omit
-an earlier file prefix from 7-day, 30-day, or all-history totals. `managementUsageMaxReadBytes` remains
-accepted for compatibility with bounded legacy readers, but changing it no longer expands or reduces
-the history summarized by this endpoint.
+`GET /api/usage` reads the mixed canonical `~/.opencodex/usage.jsonl` ledger from the beginning
+through the current snapshot on a cold start. It processes fixed 1 MiB chunks and retains compact
+aggregate state rather than every normalized request row. Later refreshes validate the previous line
+boundary and fold only newly appended complete rows. Concurrent callers share the same refresh.
+Detailed request rows are retained for a rolling seven days. Startup and hourly maintenance replace
+older complete reporting days with versioned numeric rollups, preserving scalar provider/model/API-key
+filter cells, coverage and counts, account statistics, and cost frozen at compaction time. Rollups
+store the reporting timezone. The API's `history` metadata describes `detailRetentionDays`,
+`detailAvailableFrom`, `historicalGranularity: "day"`, `historicalCostPolicy: "frozen"`, `timeZone`,
+and `compactedBefore`.
+
+Preset totals (30 days by default) and lifetime totals are served from rollups plus recent rows; the
+daily chart remains capped at 366 days, but lifetime totals are not capped. `managementUsageMaxReadBytes`
+remains accepted for compatibility with bounded legacy readers, but it does not control retention or
+accuracy. The former `usageLedgerMaxBytes` setting is advisory and cannot remove accounting or recent
+detail. The rebuildable `usage-accounting.sqlite` accelerates reads but is not the durable history
+source. Downgrading to a format without rollup support requires restoring a compatible snapshot and
+replaying subsequent writes.
 
 Pass both `since` and `until` to select an inclusive custom interval. Each accepts integer Unix
 epoch **milliseconds**, or a full ISO datetime with an explicit timezone. Invalid dates, negative
@@ -439,26 +449,28 @@ or out-of-range values, reversed bounds, and a single bound are rejected. Custom
 `range`; the response keeps the preset `range` field for compatibility and adds `customWindow: true`,
 the exact `since`, and `until`. `generatedAt` remains the time the report was produced.
 
-Custom windows filter individual ledger entries before daily aggregation, including partial first
-and last days. They preserve `surface`, `provider`, `model`, and `apiKeyId` filtering and never reuse
-or overwrite unfiltered preset summaries. The daily chart remains capped at 366 local calendar days;
-totals cover the full requested interval. Snapshot-window fields describe the scanned ledger before
-the time filter, so they can extend beyond the requested bounds.
+Custom windows preserve `surface`, `provider`, `model`, and `apiKeyId` filtering and never reuse or
+overwrite unfiltered preset summaries. Exact timestamps are available in the seven-day detailed
+window. A bound intersecting compacted history is accepted only at complete reporting-day boundaries;
+otherwise the endpoint returns a precision error with the `history` metadata. The daily chart remains
+capped at 366 local calendar days; lifetime totals are uncapped. Snapshot-window fields describe the
+scanned ledger before the time filter, so they can extend beyond the requested bounds.
 
 The Usage page accepts local date/time inputs. Its selected ending minute includes the entire
 minute through `:59.999`. Choosing a preset or clearing the custom window restores preset behavior.
 This adds exact range selection and existing cost estimates; it does not add hourly chart buckets
 or offline reporting.
 
-The runtime ledger is append-only. Replacing or truncating it, or changing local pricing/time-zone
-inputs, triggers a complete rebuild. If you manually edit an older row in place while the proxy is
-running, restart the proxy (or replace the file) before relying on the new total; incremental refreshes
-verify the append boundary, not every previously aggregated byte.
+The runtime ledger appends new request rows and maintenance may atomically replace eligible detailed
+rows with rollups. Replacing or truncating it, or changing local pricing/time-zone inputs, triggers a
+complete rebuild. If you manually edit an older row in place while the proxy is running, restart the
+proxy (or replace the file) before relying on the new total; incremental refreshes verify the append
+boundary, not every previously aggregated byte.
 
 The response still includes `historyTruncated`, `truncatedPrefixBytes`, `entriesTruncated`, and
 `entriesDropped` so older clients can consume the same wire shape. A successful whole-ledger scan
 reports `false`, `0`, `false`, and `0`, respectively. These are legacy compatibility fields, not a
-signal that the endpoint read only a configured-size tail.
+signal that the endpoint read only a configured-size tail or that historical usage is still detailed.
 
 For `GET /api/usage?range=30d&surface=codex`, `accounts` contains one row per observed Codex
 pool label. Each row reports `accountLogLabel`, token totals, `usageCoverageRatio`, and an optional

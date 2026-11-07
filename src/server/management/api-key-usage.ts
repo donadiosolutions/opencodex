@@ -207,6 +207,8 @@ export function cacheApiKeyUsageFromRollup(
 }
 
 export async function readApiKeyUsageRollup(configuredIds: string[], maxReadBytes?: number): Promise<ApiKeyUsageSnapshot> {
+  const { hasCompactedUsageLedger, readAccountingKeyUsage } = await import("../../usage/accounting-store");
+  if (hasCompactedUsageLedger()) return await readAccountingKeyUsage(configuredIds) as ApiKeyUsageSnapshot;
   // JSON rather than a joined string: ids are only validated as non-empty
   // strings, so `["a\0b","c"]` and `["a","b\0c"]` join to the same value and one
   // config could be served the other's cached rollup.

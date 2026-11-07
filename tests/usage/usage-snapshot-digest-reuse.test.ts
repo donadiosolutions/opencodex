@@ -39,6 +39,33 @@ async function measuredRead(maxReadBytes?: number) {
 }
 
 describe("retained usage digest reuse", () => {
+  test("shared flights filter per caller and retained byte spans stay aligned as the cutoff advances", async () => {
+    const now = Date.now();
+    const line = (id: string, timestamp: number) => `${JSON.stringify({
+      requestId: id,
+      provider: "mock",
+      model: "fixture",
+      timestamp,
+      status: 200,
+      durationMs: 1,
+      usageStatus: "reported",
+    })}\n`;
+    const old = line("old", now - 9 * 86_400_000);
+    const recent = line("recent", now - 2 * 86_400_000);
+    writeFileSync(usageLogPath(), old + recent);
+
+    const staleView = readUsageSnapshotForManagement(undefined, { now });
+    const newerView = readUsageSnapshotForManagement(undefined, { now: now + 6 * 86_400_000 });
+    const [stale, newer] = await Promise.all([staleView, newerView]);
+    expect(stale.entries.map(entry => entry.requestId)).toEqual(["recent"]);
+    expect(newer.entries).toEqual([]);
+
+    const next = line("next", now + 1);
+    appendFileSync(usageLogPath(), next);
+    const advanced = await readUsageSnapshotForManagement(undefined, { now: now + 1 * 86_400_000 });
+    expect(advanced.entries.map(entry => entry.requestId)).toEqual(["recent", "next"]);
+  });
+
   test("each unchanged poll hashes the retained bytes exactly once, at either input size", async () => {
     for (const count of [64, 128]) {
       resetUsageReadCacheForTests();

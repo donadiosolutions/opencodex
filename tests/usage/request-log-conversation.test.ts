@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   conversationIdFromClaudeCacheKey,
@@ -17,6 +17,10 @@ import {
   type RequestLogEntry,
 } from "../../src/server/request-log";
 import type { PersistedUsageEntry } from "../../src/usage/log";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
+
+beforeEach(() => setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS));
+afterEach(() => setUsageDetailNowForTests(undefined));
 
 function log(overrides: Partial<RequestLogEntry>): RequestLogEntry {
   return {

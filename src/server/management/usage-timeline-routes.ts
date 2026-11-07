@@ -1,4 +1,5 @@
 import { readUsageSnapshotForManagement } from "../../usage/log";
+import { hasCompactedUsageLedger, readRecentAccountingEntries } from "../../usage/accounting-store";
 import { createTimelineAccumulator, parseTimelineQuery } from "../../usage/timeline";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
@@ -21,7 +22,9 @@ export async function handleUsageTimelineRoutes(ctx: ManagementContext): Promise
   let promise: Promise<ReturnType<ReturnType<typeof createTimelineAccumulator>["finish"]>>;
   promise = (async () => {
     const accumulator = createTimelineAccumulator(normalized);
-    const snapshot = await readUsageSnapshotForManagement(ctx.config.managementUsageMaxReadBytes);
+    const snapshot = hasCompactedUsageLedger()
+      ? { entries: await readRecentAccountingEntries(normalized.now - normalized.hours * 3_600_000), truncatedPrefixBytes: 0, entriesTruncated: false }
+      : await readUsageSnapshotForManagement(ctx.config.managementUsageMaxReadBytes);
     for (const entry of snapshot.entries) accumulator.add(entry);
     return {
       ...accumulator.finish(),

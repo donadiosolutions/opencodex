@@ -2,6 +2,7 @@ import { baseProviderLabel } from "../providers/label";
 import { canonicalAntigravityUsageModel } from "../providers/antigravity-models";
 import { usageDisplayTotalTokens } from "./totals";
 import type { UsageTimeWindow } from "./time-range";
+import { createReportingCalendar, type ReportingCalendar } from "./reporting-calendar";
 import { isUnresolvedRequestedModel, usageModelPriceOptions } from "./model-identity";
 import {
   classifyCacheTelemetryProvenance,
@@ -11,6 +12,14 @@ import {
   type UsageStatus,
 } from "./log";
 import { type AttemptCostEstimate, type CostEstimate, estimateAttemptCost, estimateRequestCost, isMeasuredStatus, serviceTierContext, type ServiceTierContext, tokensPerSecond } from "./cost";
+
+import {
+  assertUsageSummarySnapshot, decodeUsagePartition, encodeUsagePartition,
+  type UsageSummarySnapshot, type UsagePartitionSurface, type UsageAccumulatorMode,
+  type UsageRequestCounts, type UsageModelOverlap, type UsageModelAccumulator,
+  type UsageAccountAccumulator, type UsagePartition, type UsageDayAccumulator, type NormalizedUsageFilter,
+} from "./summary-snapshot";
+export type { UsageSummarySnapshot } from "./summary-snapshot";
 
 /**
  * Canonical range members. The warm-up loop in the management usage route
@@ -341,37 +350,14 @@ export function parseUsageSurface(input: string | null | undefined): UsageSurfac
   return "all";
 }
 
-function startOfLocalDay(ts: number): number {
-  const d = new Date(ts);
-  d.setHours(0, 0, 0, 0);
-  return d.getTime();
+export function rangeWindow(range: UsageRange, now: number, timeZone?: string): { since: number | null; days: number } {
+  return calendarRangeWindow(range, now, createReportingCalendar(timeZone));
 }
 
-export function rangeWindow(range: UsageRange, now: number): { since: number | null; days: number } {
-  // Handled before the others because the fallthrough below is the `all`
-  // window: a range that reaches it is silently reported as all-time history,
-  // which for a cost surface is a plausible-looking wrong answer rather than a
-  // visible failure.
-  if (range === "today") return { since: startOfLocalDay(now), days: 1 };
-  if (range === "7d") {
-    const start = new Date(startOfLocalDay(now));
-    start.setDate(start.getDate() - 6);
-    return { since: start.getTime(), days: 7 };
-  }
-  if (range === "30d") {
-    const start = new Date(startOfLocalDay(now));
-    start.setDate(start.getDate() - 29);
-    return { since: start.getTime(), days: 30 };
-  }
-  return { since: null, days: 0 };
-}
-
-function localDateKey(ts: number): string {
-  const d = new Date(ts);
-  const y = String(d.getFullYear()).padStart(4, "0");
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+function calendarRangeWindow(range: UsageRange, now: number, calendar: ReportingCalendar): { since: number | null; days: number } {
+  if (range !== "today" && range !== "7d" && range !== "30d") return { since: null, days: 0 };
+  const days = range === "today" ? 1 : range === "7d" ? 7 : 30;
+  return { since: calendar.shiftDay(calendar.startOfDay(now), 1 - days), days };
 }
 
 function dayCountForAllRange(oldest: number | null, now: number): number {
@@ -380,21 +366,16 @@ function dayCountForAllRange(oldest: number | null, now: number): number {
   return Math.min(MAX_USAGE_DAY_BUCKETS, Math.max(1, days));
 }
 
-function customWindowDates(window: UsageTimeWindow): string[] {
-  const start = startOfLocalDay(window.since);
-  const date = new Date(startOfLocalDay(window.until));
+function customWindowDates(window: UsageTimeWindow, calendar: ReportingCalendar): string[] {
+  const start = calendar.startOfDay(window.since);
+  let date = calendar.startOfDay(window.until);
   const dates: string[] = [];
-  while (date.getTime() >= start && dates.length < MAX_USAGE_DAY_BUCKETS) {
-    dates.push(localDateKey(date.getTime()));
-    const previous = date.getTime();
-    date.setDate(date.getDate() - 1);
-    date.setHours(0, 0, 0, 0);
+  while (date >= start && dates.length < MAX_USAGE_DAY_BUCKETS) {
+    dates.push(calendar.dateKey(date));
+    const previous = date;
+    date = calendar.startOfDay(calendar.shiftDay(date, -1));
     // A skipped civil day can normalize back to this same midnight (Apia, 2011).
-    // Move through the preceding instant to find the prior existing local day.
-    if (date.getTime() >= previous) {
-      date.setTime(previous - 1);
-      date.setHours(0, 0, 0, 0);
-    }
+    if (date >= previous) date = calendar.startOfDay(previous - 1);
   }
   return dates.reverse();
 }
@@ -697,95 +678,12 @@ const REQUEST_PRICED = 1 << 4;
 const REQUEST_UNPRICED = 1 << 5;
 const REQUEST_STATUS_MASK = REQUEST_REPORTED | REQUEST_ESTIMATED | REQUEST_UNREPORTED | REQUEST_UNSUPPORTED;
 
-type UsagePartitionSurface = Exclude<UsageSurface, "all"> | "other";
-export type UsageAccumulatorMode = "exact" | "row-unique";
-
-interface UsageRequestCounts {
-  requests: number;
-  measuredRequests: number;
-  reportedRequests: number;
-  estimatedRequests: number;
-  pricedRequests: number;
-  unpricedRequests: number;
-}
-
-interface UsageModelOverlap {
-  models: ReadonlyArray<readonly [modelKey: string, requestFacts: number]>;
-  count: number;
-}
-
-interface UsageModelAccumulator {
-  provider: string;
-  model: string;
-  resolvedModel?: string;
-  hasUnresolvedRequestedModel?: true;
-  firstSeen: number;
-  attemptCount: number;
-  dayTotalTokens: number;
-  summaryTotalTokens: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens: number;
-  cacheCreationInputTokens: number;
-  cacheObserved: boolean;
-  /** Input tokens from attributions with OBSERVED cache detail; the hit-rate denominator. */
-  cacheObservedInputTokens: number;
-  throughputOutputTokens: number;
-  throughputDurationMs: number;
-  throughputSamples: number;
-  estimatedCostUsd?: number;
-  requestCounts: UsageRequestCounts;
-  requestFacts?: Map<number, number>;
-}
-
-interface UsageAccountAccumulator {
-  accountLogLabel: string;
-  ambiguous: boolean;
-  firstSeen: number;
-  requests: number;
-  requestIds?: Set<number>;
-  attemptCount: number;
-  measuredAttempts: number;
-  reportedAttempts: number;
-  estimatedAttempts: number;
-  unmeteredAttempts: number;
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadInputTokens: number;
-  cacheCreationInputTokens: number;
-  reasoningOutputTokens: number;
-  totalTokens: number;
-  estimatedCostUsd?: number;
-  pricedAttempts: number;
-  unpricedAttempts: number;
-}
-
-interface UsagePartition {
-  date: string;
-  dayStart: number;
-  surface: UsagePartitionSurface;
-  oldestTimestamp: number | null;
-  totals: UsageSummaryTotals;
-  models: Map<string, UsageModelAccumulator>;
-  providers?: Map<string, UsageModelAccumulator>;
-  accounts: Map<string, UsageAccountAccumulator>;
-  modelOverlaps: Map<string, UsageModelOverlap>;
-}
-
-interface UsageDayAccumulator {
-  totals: UsageSummaryTotals;
-  models: Map<string, UsageModelAccumulator>;
-  modelOverlaps: UsageModelOverlap[];
-}
-
-interface NormalizedUsageFilter {
-  provider: string | null;
-  model: string | null;
-  apiKeyId: string | null;
-}
+export type { UsageAccumulatorMode } from "./summary-snapshot";
 
 export interface UsageSummaryAccumulator {
   add(entry: PersistedUsageEntry): void;
+  exportSnapshot(): UsageSummarySnapshot;
+  mergeSnapshot(snapshot: UsageSummarySnapshot): void;
   /** Return a mutation-independent snapshot that may continue accepting rows. */
   clone(): UsageSummaryAccumulator;
   summarize(
@@ -1277,6 +1175,8 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
   private readonly filter: NormalizedUsageFilter | null;
   private readonly mode: UsageAccumulatorMode;
   private readonly window: UsageTimeWindow | undefined;
+  private readonly timeZone: string | undefined;
+  private readonly calendar: ReportingCalendar;
   private nextRequestId = 0;
   private nextOrdinal = 0;
   private snapshotStart: number | null = null;
@@ -1288,6 +1188,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     filter?: { provider?: string | null; model?: string | null; apiKeyId?: string | null };
     mode?: UsageAccumulatorMode;
     window?: UsageTimeWindow;
+    timeZone?: string;
   }) {
     const provider = normalizeFilterValue(options?.filter?.provider);
     const model = normalizeFilterValue(options?.filter?.model);
@@ -1298,6 +1199,8 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     this.mode = options?.mode ?? "exact";
     this.window = options?.window ? Object.freeze({ ...options.window }) : undefined;
     this.requestIds = this.mode === "exact" ? new Map() : null;
+    this.timeZone = options?.timeZone;
+    this.calendar = createReportingCalendar(this.timeZone);
   }
 
   get snapshotWindow(): { start: number | null; end: number | null } {
@@ -1305,7 +1208,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
   }
 
   get estimatedBytes(): number {
-    return this.estimatedRetainedBytes;
+    return this.estimatedRetainedBytes + this.calendar.estimatedBytes;
   }
 
   clone(): UsageSummaryAccumulator {
@@ -1313,6 +1216,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
       ...(this.filter ? { filter: this.filter } : {}),
       mode: this.mode,
       window: this.window,
+      timeZone: this.timeZone,
     });
     cloned.nextRequestId = this.nextRequestId;
     cloned.nextOrdinal = this.nextOrdinal;
@@ -1349,6 +1253,60 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     return cloned;
   }
 
+  exportSnapshot(): UsageSummarySnapshot {
+    if (this.mode !== "row-unique") throw new Error("Only row-unique usage can be exported");
+    return {
+      version: 1, filter: this.filter ? { ...this.filter } : null,
+      ...(this.window ? { window: { ...this.window } } : {}),
+      snapshotWindow: this.snapshotWindow, nextOrdinal: this.nextOrdinal, comboOverlap: this.comboOverlap,
+      partitions: [...this.partitions.values()].map(encodeUsagePartition),
+    };
+  }
+
+  mergeSnapshot(snapshot: UsageSummarySnapshot): void {
+    assertUsageSummarySnapshot(snapshot);
+    if (this.mode !== "row-unique") throw new Error("Only row-unique usage can merge snapshots");
+    if (["provider", "model", "apiKeyId"].some(key =>
+      snapshot.filter?.[key as keyof NormalizedUsageFilter] !== this.filter?.[key as keyof NormalizedUsageFilter])) {
+      throw new Error("Usage snapshot filter mismatch");
+    }
+    if (snapshot.window && (!this.window || this.window.since < snapshot.window.since || this.window.until > snapshot.window.until)) {
+      throw new Error("Usage snapshot does not cover the requested window");
+    }
+    const { start, end } = snapshot.snapshotWindow;
+    if (start !== null) this.snapshotStart = this.snapshotStart === null ? start : Math.min(this.snapshotStart, start);
+    if (end !== null) this.snapshotEnd = this.snapshotEnd === null ? end : Math.max(this.snapshotEnd, end);
+    for (const encoded of snapshot.partitions) {
+      const nextDay = this.calendar.shiftDay(encoded.dayStart, 1);
+      if (this.window && (encoded.dayStart > this.window.until || nextDay <= this.window.since)) continue;
+      const incoming = decodeUsagePartition(encoded, this.nextOrdinal);
+      this.comboOverlap ||= incoming.comboOverlap;
+      const key = `${incoming.date}\0${incoming.surface}`;
+      const current = this.partitions.get(key);
+      if (!current) this.partitions.set(key, incoming);
+      else {
+        current.comboOverlap ||= incoming.comboOverlap;
+        mergeTotals(current.totals, incoming.totals);
+        mergeModelMaps(current.models, incoming.models);
+        mergeModelMaps(current.providers!, incoming.providers!);
+        for (const [label, account] of incoming.accounts) {
+          const existing = current.accounts.get(label);
+          if (existing) mergeAccountAccumulator(existing, account);
+          else current.accounts.set(label, account);
+        }
+        for (const [signature, overlap] of incoming.modelOverlaps) {
+          const existing = current.modelOverlaps.get(signature);
+          if (existing) existing.count += overlap.count;
+          else current.modelOverlaps.set(signature, overlap);
+        }
+        if (incoming.oldestTimestamp !== null) current.oldestTimestamp = current.oldestTimestamp === null
+          ? incoming.oldestTimestamp : Math.min(current.oldestTimestamp, incoming.oldestTimestamp);
+      }
+      this.estimatedRetainedBytes += JSON.stringify(encoded).length * 2;
+    }
+    this.nextOrdinal += snapshot.nextOrdinal;
+  }
+
   private requestKey(requestId: string): number {
     if (!this.requestIds) throw new Error("row-unique accumulators do not retain request ids");
     const existing = this.requestIds.get(requestId);
@@ -1360,13 +1318,14 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
   }
 
   private partitionFor(entry: PersistedUsageEntry): UsagePartition {
-    const date = localDateKey(entry.timestamp);
-    const dayStart = startOfLocalDay(entry.timestamp);
+    const date = this.calendar.dateKey(entry.timestamp);
+    const dayStart = this.calendar.startOfDay(entry.timestamp);
     const surface = usagePartitionSurface(entry);
     const key = `${date}\0${surface}`;
     let partition = this.partitions.get(key);
     if (!partition) {
       partition = {
+        comboOverlap: false,
         date,
         dayStart,
         surface,
@@ -1562,6 +1521,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     this.comboOverlap ||= projected.comboOverlap;
     const entry = projected.entry;
     const partition = this.partitionFor(entry);
+    partition.comboOverlap ||= projected.comboOverlap;
     const costInfo = computeEntryCost(entry);
     bumpStatus(partition.totals, entry.usageStatus);
     partition.totals.attemptCount += entry.attempts?.length ?? 1;
@@ -1624,7 +1584,7 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     now: number,
     surface: UsageSurface = "all",
   ): UsageSummary & { filter?: UsageFilterEcho } {
-    const preset = rangeWindow(range, now);
+    const preset = calendarRangeWindow(range, now, this.calendar);
     const since = this.window?.since ?? preset.since;
     const fixedDays = preset.days;
     const totals = blankTotals();
@@ -1664,18 +1624,14 @@ class StreamingUsageSummaryAccumulator implements UsageSummaryAccumulator {
     finalizeCoverage(totals);
     finalizeThroughput(totals);
 
-    const customDates = this.window ? new Set(customWindowDates(this.window)) : null;
+    const customDates = this.window ? new Set(customWindowDates(this.window, this.calendar)) : null;
     const dayCount = customDates?.size ?? (range === "all" ? dayCountForAllRange(oldestTimestamp, now) : fixedDays);
-    const startOfToday = startOfLocalDay(this.window?.until ?? now);
-    const firstVisibleDay = new Date(startOfToday);
-    firstVisibleDay.setDate(firstVisibleDay.getDate() - dayCount + 1);
-    const firstVisibleDate = localDateKey(firstVisibleDay.getTime());
-    const lastVisibleDate = localDateKey(startOfToday);
+    const startOfToday = this.calendar.startOfDay(this.window?.until ?? now);
+    const firstVisibleDate = this.calendar.dateKey(this.calendar.shiftDay(startOfToday, 1 - dayCount));
+    const lastVisibleDate = this.calendar.dateKey(startOfToday);
     const visibleDates = customDates ?? new Set<string>();
     for (let offset = dayCount - 1; !customDates && offset >= 0; offset--) {
-      const date = new Date(startOfToday);
-      date.setDate(date.getDate() - offset);
-      visibleDates.add(localDateKey(date.getTime()));
+      visibleDates.add(this.calendar.dateKey(this.calendar.shiftDay(startOfToday, -offset)));
     }
     for (const key of visibleDates) {
       if (!dayAccumulators.has(key)) {
@@ -1745,6 +1701,8 @@ export function createUsageSummaryAccumulator(options?: {
   filter?: { provider?: string | null; model?: string | null; apiKeyId?: string | null };
   mode?: UsageAccumulatorMode;
   window?: UsageTimeWindow;
+  /** Retain the ledger reporting calendar when the host timezone changes. */
+  timeZone?: string;
 }): UsageSummaryAccumulator {
   return new StreamingUsageSummaryAccumulator(options);
 }

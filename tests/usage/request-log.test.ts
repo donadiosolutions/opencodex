@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import {
   filterRequestLogs,
   addFinalRequestLog,
@@ -49,6 +49,10 @@ import { createSseInspector } from "../../src/server/relay";
 import { acquireOwnedSpendHome } from "../helpers/owned-spend-home";
 import { log } from "../helpers/request-log-entry";
 import { decodeRequestLogCursor, selectRequestLogPoll } from "../../src/server/request-log-cursor";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
+
+beforeEach(() => setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS));
+afterEach(() => setUsageDetailNowForTests(undefined));
 
 describe("HTTP diagnostic lifecycle ownership", () => {
   test("JSON terminal failure without usage retains explicit response identity", () => {

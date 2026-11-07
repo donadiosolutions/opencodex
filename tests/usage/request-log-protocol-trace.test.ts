@@ -2,7 +2,7 @@
  * The observed protocol trace on request-log rows (PF-02): computed at finalize, carried
  * through the persisted usage row, re-validated on read, and filterable by `protocolMode`.
  */
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import type { ProtocolTraceV1 } from "../../src/protocols/dto";
 import { markProtocolBlocked, markProtocolEntry } from "../../src/protocols/trace";
 import {
@@ -16,6 +16,10 @@ import {
   type RequestLogEntry,
 } from "../../src/server/request-log";
 import { normalizeUsageEntryForTest, type PersistedUsageEntry } from "../../src/usage/log";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
+
+beforeEach(() => setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS));
+afterEach(() => setUsageDetailNowForTests(undefined));
 
 function finalize(logCtx: RequestLogContext, status = 200): RequestLogEntry {
   let captured: RequestLogEntry | undefined;

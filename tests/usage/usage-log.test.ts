@@ -24,11 +24,13 @@ import {
   type PersistedUsageEntry,
 } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
 
 let testDir = "";
 let previousHome: string | undefined;
 
 beforeEach(() => {
+  setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS);
   previousHome = process.env.OPENCODEX_HOME;
   testDir = mkdtempSync(join(tmpdir(), "ocx-usage-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -36,6 +38,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setUsageDetailNowForTests(undefined);
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
   if (testDir) removeTreeWithRetry(testDir);

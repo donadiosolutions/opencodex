@@ -2898,5 +2898,11 @@
   "client-error-body.test.ts": "lib",
   "chat-error-body-normalization.test.ts": "responses",
   "chat-error-collector-verdicts.test.ts": "responses",
-  "server-chat-error-body-evidence.test.ts": "server"
+  "server-chat-error-body-evidence.test.ts": "server",
+  "usage-rollup.test.ts": "usage",
+  "usage-compaction.test.ts": "usage",
+  "usage-accounting-store.test.ts": "usage",
+  "usage-detail-retention.test.ts": "usage",
+  "usage-reporting-timezone.test.ts": "usage",
+  "api-compacted-usage.test.ts": "server"
 }

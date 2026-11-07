@@ -4050,6 +4050,8 @@ export const ja: Record<TKey, string> = {
   "usage.range.required": "開始と終了の日時を両方入力してください。",
   "usage.range.invalid": "1970-01-01 UTC以降の有効な現地日時を入力してください。",
   "usage.range.reversed": "終了日時は開始日時と同じか、それ以降にしてください。",
+  "usage.range.historicalDailyPrecisionRequired": "詳細履歴の集約前の日付では、現地の報告日全体を選択してください（開始 00:00、終了 23:59）。",
+  "usage.historyRetention": "詳細な利用データは{days}日間保持されます。それ以前の履歴は日別集計で表示され、費用推定値は固定されます。",
   "usage.range.applied": "選択した期間：{start} – {end}（両端を含む）。",
   "models.pickerOrder.editorHint": "ルーティングモデルを並べ替えて下書きを保存します。おすすめ行は固定され、ネイティブモデルは表示されません。",
   "models.pickerOrder.nativeLocked": "保存済みの順序にネイティブモデルが含まれています。ルーティングのプリセットかデフォルトを適用してからカスタム順序を編集してください。",

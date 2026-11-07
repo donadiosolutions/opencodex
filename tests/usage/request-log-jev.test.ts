@@ -1,4 +1,4 @@
-import { expect, test } from "bun:test";
+import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -11,6 +11,10 @@ import {
 } from "../../src/server/request-log";
 import { readUsageEntries, resetUsageReadCacheForTests } from "../../src/usage/log";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
+
+beforeEach(() => setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS));
+afterEach(() => setUsageDetailNowForTests(undefined));
 
 test("JEV decision telemetry survives finalization, disk persistence and hydration", () => {
   const previousHome = process.env.OPENCODEX_HOME;

@@ -1,0 +1,21 @@
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { UsageRollupBuilder } from "../../src/usage/rollup";
+import { closeUsageAccountingStore } from "../../src/usage/accounting-store";
+import { compactedUsageResponse } from "../../src/server/management/compacted-usage-response";
+import { removeTreeWithRetry } from "../helpers/remove-tree";
+let home: string;
+let previous: string | undefined;
+const now = Date.now();
+beforeEach(() => { previous = process.env.OPENCODEX_HOME; home = mkdtempSync(join(tmpdir(), "ocx-api-compacted-")); process.env.OPENCODEX_HOME = home; });
+afterEach(() => { closeUsageAccountingStore(); if (previous === undefined) delete process.env.OPENCODEX_HOME; else process.env.OPENCODEX_HOME = previous; removeTreeWithRetry(home); });
+test("compacted reports expose complete accounting and retention metadata", async () => {
+  const builder = new UsageRollupBuilder({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, compactedBefore: now - 7 * 86_400_000 });
+  builder.add({ requestId: "gone", provider: "test", model: "test", timestamp: now - 10 * 86_400_000, status: 200, durationMs: 1, usageStatus: "reported", usage: { inputTokens: 10, outputTokens: 5 } });
+  writeFileSync(join(home, "usage.jsonl"), builder.finish().map(row => JSON.stringify(row)).join("\n") + "\n");
+  const result = await compactedUsageResponse("all", "all", {}, undefined, now);
+  expect(result).toMatchObject({ status: 200, body: { summary: { totalTokens: 15 }, history: { detailRetentionDays: 7, historicalCostPolicy: "frozen" }, historyTruncated: false } });
+  expect(await compactedUsageResponse("all", "all", {}, { since: now - 10 * 86_400_000 + 123, until: now }, now)).toMatchObject({ status: 400, body: { error: "historical_daily_precision_required" } });
+});

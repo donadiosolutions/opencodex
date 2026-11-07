@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { handleManagementAPI } from "../../src/server/management-api";
-import { usageLogPath } from "../../src/usage/log";
+import { usageLogPath, readRecentUsageEntries } from "../../src/usage/log";
 import {
   addRequestLog,
   clearRequestLogsForTests,
@@ -133,6 +133,11 @@ describe("GET /api/logs display metrics", () => {
       expect((await readDetail(invalid))?.status).toBe(400);
     }
     expect((await readDetail("requestId=missing"))?.status).toBe(404);
+    const live = getRequestLogEntries()[0]!;
+    const retainedTimestamp = live.timestamp;
+    live.timestamp = Date.now() - 8 * 86_400_000;
+    expect((await readDetail(query))?.status).toBe(404);
+    live.timestamp = retainedTimestamp;
     evictOldestRequestLogForBudget();
     expect((await readDetail(query))?.status).toBe(404);
   });
@@ -362,7 +367,9 @@ describe("GET /api/logs display metrics", () => {
       const defaultTarget = usageLogPath();
       expect(defaultTarget).not.toBe(resolvedTarget);
       if (existsSync(defaultTarget)) {
-        expect(readFileSync(defaultTarget, "utf-8")).not.toContain(requestId);
+        // A fixture write appends at EOF; a bounded tail proves it did not
+        // land here without allocating a multi-gigabyte production ledger.
+        expect(readRecentUsageEntries(20).map(row => row.requestId)).not.toContain(requestId);
       }
     } finally {
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;

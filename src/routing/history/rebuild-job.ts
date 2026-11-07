@@ -79,8 +79,8 @@ export class RebuildWorkerJob {
   }
 
   /** Build the complete private file; resolves with the ingested row count. */
-  async build(indexPath: string, buildPath: string, reason: string, revision: UsageLogRevision): Promise<number> {
-    const reply = await this.send({ type: "build", indexPath, buildPath, reason, revision });
+  async build(indexPath: string, buildPath: string, reason: string, revision: UsageLogRevision, now?: number): Promise<number> {
+    const reply = await this.send({ type: "build", indexPath, buildPath, reason, revision, now });
     if (reply.type !== "built") throw new Error("unexpected request-history build reply");
     return reply.rows;
   }

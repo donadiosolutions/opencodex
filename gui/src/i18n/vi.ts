@@ -3979,6 +3979,8 @@ export const vi: Record<TKey, string> = {
   "usage.range.required": "Hãy nhập cả ngày và giờ bắt đầu cũng như kết thúc.",
   "usage.range.invalid": "Hãy nhập ngày và giờ địa phương hợp lệ, từ ngày 1970-01-01 UTC trở đi.",
   "usage.range.reversed": "Thời điểm kết thúc phải bằng hoặc sau thời điểm bắt đầu.",
+  "usage.range.historicalDailyPrecisionRequired": "Với ngày trước khi lịch sử chi tiết được thu gọn, hãy chọn trọn ngày báo cáo theo giờ địa phương (bắt đầu 00:00, kết thúc 23:59).",
+  "usage.historyRetention": "Chi tiết sử dụng được lưu giữ trong {days} ngày. Lịch sử cũ hơn hiển thị theo bản tóm tắt hằng ngày và ước tính chi phí được giữ nguyên.",
   "usage.range.applied": "Khoảng thời gian đã chọn: {start} – {end} (bao gồm cả hai).",
   "models.pickerOrder.editorHint": "Sắp xếp lại các model được định tuyến, sau đó lưu bản nháp của bạn. Các hàng nổi bật (featured) được cố định; các model gốc (native) không được hiển thị.",
   "models.pickerOrder.nativeLocked": "Thứ tự đã lưu này bao gồm các model gốc. Hãy áp dụng một cài đặt sẵn (preset) định tuyến hoặc Mặc định (Default) trước khi chỉnh sửa Tùy chỉnh (Custom).",

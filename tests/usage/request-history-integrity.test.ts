@@ -34,6 +34,7 @@ import { clearHealthHistoryCacheForTests, healthEvidenceForCandidate } from "../
 import { flushConfigDirHardeningForTests } from "../../src/config/paths";
 import { flushWindowsSecretAclReapsBeforeRemoval } from "../../src/lib/windows-secret-acl";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
 
 let testDir = "";
 let previousHome: string | undefined;
@@ -43,6 +44,7 @@ function entry(requestId: string, timestamp: number): PersistedUsageEntry {
 }
 
 beforeEach(() => {
+  setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS);
   previousHome = process.env.OPENCODEX_HOME;
   testDir = mkdtempSync(join(tmpdir(), "ocx-integrity-"));
   process.env.OPENCODEX_HOME = testDir;
@@ -53,6 +55,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  setUsageDetailNowForTests(undefined);
   clearHealthHistoryCacheForTests();
   closeRequestHistoryIndex();
   setRequestHistoryIntegrityOptionsForTests(undefined);

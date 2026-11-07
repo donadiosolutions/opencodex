@@ -4051,6 +4051,8 @@ export const tr: Record<TKey, string> = {
   "usage.range.required": "Başlangıç ve bitiş için tarih ve saat girin.",
   "usage.range.invalid": "1970-01-01 UTC veya sonrasına ait geçerli yerel tarih ve saat girin.",
   "usage.range.reversed": "Bitiş, başlangıçla aynı veya daha sonra olmalıdır.",
+  "usage.range.historicalDailyPrecisionRequired": "Ayrıntılı geçmişin birleştirildiği tarihlerden önce, tam yerel raporlama günlerini seçin (başlangıç 00:00, bitiş 23:59).",
+  "usage.historyRetention": "Ayrıntılı kullanım {days} gün saklanır. Daha eski geçmiş günlük özetler olarak gösterilir ve maliyet tahminleri sabitlenir.",
   "usage.range.applied": "Seçilen aralık: {start} – {end} (iki sınır da dahil).",
   "models.pickerOrder.editorHint": "Yönlendirilen modelleri sıralayıp taslağı kaydedin. Öne çıkan satırlar sabittir; yerel modeller gösterilmez.",
   "models.pickerOrder.nativeLocked": "Kayıtlı sıra yerel modeller içeriyor. Özel sırayı düzenlemeden önce yönlendirme ön ayarını veya Varsayılan seçeneğini uygulayın.",
