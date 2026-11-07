@@ -480,7 +480,6 @@ describe("Codex auth context", () => {
       })).resolves.toMatchObject({
         kind: "main",
         accountId: null,
-        selectedMain: true,
       });
       expect(cfg.activeCodexAccountPinned).toBe(MAIN_CODEX_ACCOUNT_ID);
     } finally {

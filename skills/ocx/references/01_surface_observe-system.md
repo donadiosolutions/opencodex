@@ -483,6 +483,8 @@ State-changing: yes. JSON mode: `payload`.
 
 ### `ocx logs export`
 
+Usage: `ocx logs export (--request <id>... | --from <ms> --to <ms>) [--out <path> [--force]] [--json]`
+
 Build a bounded, sanitized support bundle from canonical usage-ledger rows.
 
 State-changing: no. JSON mode: `payload`.

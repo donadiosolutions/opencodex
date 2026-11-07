@@ -229,10 +229,12 @@ describe("Meta Muse Responses include compatibility", () => {
     }
   });
 
-  test("does not infer Meta from a model name, path or lookalike hostname", () => {
-    for (const baseUrl of ["https://api.openai.com/v1", "https://api.meta.ai.example.test/v1", "https://example.test/api.meta.ai/v1"]) {
-      const include = ["reasoning.encrypted_content", "output.encrypted_content"];
-      expect(JSON.parse(build({ ...meta, baseUrl }, { include }).body).include).toEqual(include);
+  test("OpenAI retains output encryption while lookalike Meta gateways follow the generic strip", () => {
+    const include = ["reasoning.encrypted_content", "output.encrypted_content"];
+    expect(JSON.parse(build({ ...meta, baseUrl: "https://api.openai.com/v1" }, { include }).body).include).toEqual(include);
+    for (const baseUrl of ["https://api.meta.ai.example.test/v1", "https://example.test/api.meta.ai/v1"]) {
+      expect(JSON.parse(build({ ...meta, baseUrl }, { include }).body).include)
+        .toEqual(["reasoning.encrypted_content"]);
     }
   });
 });

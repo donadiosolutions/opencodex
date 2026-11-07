@@ -10,7 +10,7 @@ import { SPAWN_BUDGET_MS } from "../helpers/test-budget";
 /**
  * The routing healer against the REAL injector in a throwaway CODEX_HOME.
  *
- * A dead instance on 10199 left marker-owned routing, the journal and the catalog line behind; the
+ * A dead instance on 10199 left marker-owned routing and the journal behind; the
  * live owner serves 10100. The probe is stubbed (nothing listens in a test), everything else is the
  * production path: the file read, the read-only journal, the gates' config, `injectCodexConfig`
  * with the healer's guard. Each case runs in its own process because CODEX_HOME is resolved at
@@ -208,7 +208,7 @@ describe("codex routing heal against the real injector", () => {
     expect(out.originalConfigKept).toBe(true);
     expect(out.injectedOpenaiBaseUrl).toBe("http://127.0.0.1:10100/v1");
     expect(out.injectedRealtimeWsBaseUrl).toBe("http://127.0.0.1:10100/v1");
-    expect(out.catalogBefore).not.toBeNull();
+    expect(out.catalogBefore).toBeNull();
     expect(out.catalogAfter).toBe(out.catalogBefore);
     expect(out.warnings).toEqual([
       "Codex routing pointed at 127.0.0.1:10199, where no opencodex answers; re-pointed it at this proxy on port 10100. Codex threads opened meanwhile keep the old address until you reopen them.",

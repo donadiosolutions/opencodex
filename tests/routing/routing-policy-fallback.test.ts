@@ -67,7 +67,7 @@ describe("policy candidate fallback", () => {
     const ctx: RequestLogContext = { provider: "test", model: "test", routeDecision: trace };
     observeRequestTransport(ctx, "http");
     let calls = 0;
-    await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, ctx, {}, {
+    await handleResponsesWithPolicyFallback(request(), fixtureConfig(), ctx, {}, {
       runCore: async (req, _config, _context, options) => {
         options.onRequestBodyParsed?.(await req.json());
         if (++calls === 1) return Response.json({ error: { type: "rate_limit_error" } }, { status: 429 });
@@ -85,7 +85,7 @@ describe("policy candidate fallback", () => {
   test("a selected policy that never hops explicitly records not attempted", async () => {
     const ctx: RequestLogContext = { provider: "test", model: "test", routeDecision: policyTrace() };
     observeRequestTransport(ctx, "http");
-    await handleResponsesWithPolicyFallback(request(), {} as OcxConfig, ctx, {}, {
+    await handleResponsesWithPolicyFallback(request(), fixtureConfig(), ctx, {}, {
       runCore: async (req, _config, _context, options) => {
         options.onRequestBodyParsed?.(await req.json());
         return Response.json({ status: "completed" });

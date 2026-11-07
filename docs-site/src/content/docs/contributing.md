@@ -154,7 +154,10 @@ in the open preview core instead.
 
 ## Branches
 
-- `dev` — the only integration target. Open your pull request here.
+In the `donadiosolutions/opencodex` fork, fork-specific pull requests target
+`custom`. Its target gate also continues to accept `dev`.
+
+- `dev` — the upstream integration target. Open upstream pull requests here.
 - `main` — releases only. It moves by maintainer-controlled promotion from
   `dev`; do not open feature pull requests against it.
 - `preview` — the prerelease train.

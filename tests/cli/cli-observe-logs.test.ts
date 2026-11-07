@@ -60,7 +60,7 @@ describe("ocx logs --account", () => {
 
   test("human output names the account so a filtered result is distinguishable from an empty one", async () => {
     const rows = [
-      { id: 1, timestamp: "2026-01-01T00:00:00.000Z", provider: "openai", model: "gpt-test", status: 200, durationMs: 12, accountLogLabel: "p3f9a1" },
+      { id: 1, timestamp: "2026-01-01T00:00:00.000Z", provider: "openai", model: "gpt-test", status: 200, durationMs: 12, accountLogLabel: "p3f9a1b" },
       { id: 2, timestamp: "2026-01-01T00:00:01.000Z", provider: "xai", model: "grok-4.6", status: 200, durationMs: 9 },
     ];
     const captured = capture();
@@ -76,14 +76,15 @@ describe("ocx logs --account", () => {
       captured.restore();
     }
     expect(captured.lines).toHaveLength(2);
-    expect(captured.lines[0]).toContain("account=p3f9a1");
+    expect(captured.lines[0]).toContain("account=p3f9a1b");
     // A provider with a single account stamps no label; the column is absent rather than blank.
     expect(captured.lines[1]).not.toContain("account=");
   });
 });
 
 test("logs round-trips its printed provider/model through the server filter", async () => {
-  const rows = [log({ provider: "anthropic", model: "claude-test" }), log({ provider: "other", model: "claude-test" })];
+  const timestamp = Date.now();
+  const rows = [log({ timestamp, provider: "anthropic", model: "claude-test" }), log({ timestamp, provider: "other", model: "claude-test" })];
   const captured = spyOn(console, "log").mockImplementation(() => {});
   try {
     const code = await handleObserveCommand(["logs", "--model", "anthropic/claude-test", "--json"], {

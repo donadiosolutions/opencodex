@@ -42,6 +42,8 @@ export interface ConfirmActionOptions {
 }
 
 export interface RequestTextValueOptions {
+  /** Optional dialog heading, separate from the field label. */
+  title?: string;
   /** Field label — the string the platform `prompt()` showed above its input. */
   message: string;
   /** Pre-filled value, matching `prompt()`'s second argument. */
@@ -251,6 +253,13 @@ export function requestTextValue(options: RequestTextValueOptions): Promise<stri
   return new Promise<string | null>((resolve) => {
     if (options.signal?.aborted) { resolve(null); return; }
     const { form, bodyId, finish } = openModal<string | null>(locale, null, resolve, options.signal);
+    if (options.title) {
+      const heading = document.createElement("h3");
+      heading.id = `${bodyId}-title`;
+      heading.textContent = options.title;
+      form.append(heading);
+      form.closest("dialog")?.setAttribute("aria-labelledby", heading.id);
+    }
     const input = document.createElement("input");
     const inputId = `${bodyId}-input`;
     // A real <label for> rather than aria-describedby: the message IS the field's name, and

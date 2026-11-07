@@ -46,7 +46,7 @@ describe("CLI help navigation", () => {
     const output = capture(printUsage);
     expect(output.split("\n").length).toBeLessThanOrEqual(28);
     expect(output).toContain("Usage: ocx <command> [options]");
-    expect(output).toContain("Read or follow request logs");
+    expect(output).toContain("Inspect request logs or create a bounded sanitized support");
     expect(output).toContain("Report token usage and estimated cost");
     for (const heading of ["Start here:", "Common tasks:", "Explore:", "More help:"]) expect(output).toContain(heading);
     for (const invocation of ["ocx help --all", "ocx help <command>", "ocx capabilities --json"]) expect(output).toContain(invocation);

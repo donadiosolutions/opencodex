@@ -11,6 +11,7 @@
  * test that needed one running would be testing the wrong state.
  */
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -21,13 +22,14 @@ import {
   hasInjectedOpenaiBaseUrl,
 } from "../../src/codex/injected-marker";
 import { missingOwnedCatalogPath, setRootOpenaiBaseUrl, setRootRealtimeWsBaseUrl } from "../../src/codex/inject/config-toml";
+import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import { stripOpencodexConfig } from "../../src/codex/inject/remove";
 import { deadProxyRoutingAdviceLines, missingCodexCatalogLines } from "../../src/cli/status";
 import { findCommand } from "../../src/cli/registry";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
-/** A Windows catalog path as TOML stores it: a basic string doubles the separators (#1798). */
-const WINDOWS_CATALOG = JSON.stringify(String.raw`C:\Users\example\.codex\opencodex-catalog.json`);
+/** Ownership follows the canonical sandbox Codex home, including escaped separators. */
+const OWNED_CATALOG = JSON.stringify(DEFAULT_CATALOG_PATH);
 
 /** The loopback target the reported install was on. */
 const TARGET = {
@@ -40,7 +42,7 @@ const TARGET = {
 function lockedOutConfig(marker: string): string {
   return [
     'model = "gpt-5.5"',
-    `model_catalog_json = ${WINDOWS_CATALOG}`,
+    `model_catalog_json = ${OWNED_CATALOG}`,
     marker,
     'openai_base_url = "http://127.0.0.1:10100/v1"',
     marker,
@@ -141,15 +143,21 @@ describe("a Codex catalog pointer whose file is gone (#5261)", () => {
 
   test("an owned catalog that is missing is reported, and one that exists is not", () => {
     const dir = mkdtempSync(join(tmpdir(), "ocx-catalog-pointer-"));
+    const catalog = join(dir, "opencodex-catalog.json");
+    // Import freshly so the canonical path belongs to this fixture even without preload.
+    const inspect = () => {
+      const module = new URL("../../src/codex/inject/config-toml.ts", import.meta.url).href;
+      const result = spawnSync(process.execPath, ["-e", `
+        import { missingOwnedCatalogPath } from ${JSON.stringify(module)};
+        process.stdout.write(JSON.stringify(missingOwnedCatalogPath(${JSON.stringify(configNaming(catalog))})));
+      `], { env: { ...process.env, CODEX_HOME: dir }, encoding: "utf8", timeout: 10_000 });
+      expect(result.status).toBe(0);
+      return JSON.parse(result.stdout);
+    };
     try {
-      // Ownership is by basename, which is what injection already uses. Pinned here so the
-      // detector cannot start disagreeing with the code that writes and strips the same line.
-      const present = join(dir, "opencodex-catalog.json");
-      writeFileSync(present, "{}");
-      const absent = join(dir, "gone", "opencodex-catalog.json");
-
-      expect(missingOwnedCatalogPath(configNaming(absent))).toBe(absent);
-      expect(missingOwnedCatalogPath(configNaming(present))).toBeNull();
+      expect(inspect()).toBe(catalog);
+      writeFileSync(catalog, "{}");
+      expect(inspect()).toBeNull();
     } finally {
       removeTreeWithRetry(dir);
     }
@@ -162,6 +170,7 @@ describe("a Codex catalog pointer whose file is gone (#5261)", () => {
       // advice in front of a problem that is not opencodex's to explain.
       const userOwned = join(dir, "gone", "my-catalog.json");
       expect(missingOwnedCatalogPath(configNaming(userOwned))).toBeNull();
+      expect(missingOwnedCatalogPath(configNaming(join(dir, "opencodex-catalog.json")))).toBeNull();
       expect(missingOwnedCatalogPath('model = "gpt-5.5"\n')).toBeNull();
     } finally {
       removeTreeWithRetry(dir);

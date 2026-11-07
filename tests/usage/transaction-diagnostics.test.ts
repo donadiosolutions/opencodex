@@ -1365,7 +1365,7 @@ describe("transaction diagnostics persistence", () => {
   function completeRow(): PersistedUsageEntry {
     return {
       requestId: "ocx-contract", timestamp: 1_000, provider: "row-provider", model: "row-model",
-      requestedAlias: "caller-alias", requestedModel: "caller-model", resolvedModel: "resolved-model",
+      requestedAlias: "caller-alias", requestedModel: "caller-model", resolvedModel: "row-model",
       shadowCallRewrittenFrom: "helper-model", surface: "claude", apiKeyId: "configured-test",
       admissionKind: "configured", inboundProtocol: "responses", accountLogLabel: "p123abc",
       conversationId: "opaque-group", requestedEffort: "ultra", effectiveEffort: "xhigh",
@@ -1378,7 +1378,7 @@ describe("transaction diagnostics persistence", () => {
       usage: { inputTokens: 11, outputTokens: 13, totalTokens: 24, contextTotalTokens: 101,
         cachedInputTokens: 2, cacheReadInputTokens: 3, cacheCreationInputTokens: 4, reasoningOutputTokens: 5 },
       totalTokens: 24, errorCode: "upstream_error", terminalStatus: "failed", closeReason: "terminal",
-      upstreamError: "Synthetic provider failure", localTerminalReason: "provider-terminal",
+      upstreamCondition: "upstream_failed", localTerminalReason: "provider-terminal",
       affinity: "rebound", transportPhase: "terminal_sse", terminalSource: "upstream",
       diagnostics: completeEnvelope(), attempts: [completeAttempt()],
     };
@@ -1652,10 +1652,10 @@ describe("transaction diagnostics persistence", () => {
 
     const inMemory = getRequestLogEntries()[0]!;
     const persisted = readUsageEntries()[0]!;
-    expect(inMemory.upstreamError).toBe(persisted.upstreamError);
-    expect(inMemory.upstreamError).toContain("[REDACTED]");
-    expect(Buffer.byteLength(inMemory.upstreamError!, "utf8"))
-      .toBeLessThanOrEqual(MAX_DIAGNOSTIC_ERROR_BYTES);
+    expect(inMemory.upstreamError).toBeUndefined();
+    expect(persisted.upstreamError).toBeUndefined();
+    expect(inMemory.upstreamCondition).toBe(persisted.upstreamCondition);
+    expect(JSON.stringify({ inMemory, persisted })).not.toContain("abcdefghijklmnopqrstuvwxyz");
     expect(inMemory.diagnostics?.clientRequestId).toEqual(persisted.diagnostics?.clientRequestId);
     expect(inMemory.diagnostics?.fieldAvailability.clientRequestId).toEqual(persisted.diagnostics?.fieldAvailability.clientRequestId);
     expect(inMemory.diagnostics?.recordPersisted).toBe(true);
@@ -1720,26 +1720,26 @@ describe("transaction diagnostics persistence", () => {
     expect(readUsageEntries()[0]?.upstreamError).toBeUndefined();
   });
 
-  test("existing display errors retain public upgrade guidance while diagnostic copies reject URLs", () => {
+  test("public upgrade guidance is classified without persisting upstream text or URLs", () => {
     const message = "this model requires a subscription, upgrade for access: https://ollama.com/upgrade";
     const diagnostics = createTransactionDiagnostics({ requestId: "upgrade", receivedAt: 1 });
     diagnostics.errorMessage = message;
     addRequestLog({ requestId: "upgrade", timestamp: 1, provider: "ollama", model: "test", status: 403,
       durationMs: 1, usageStatus: "unreported", upstreamError: message, diagnostics });
-    expect(getRequestLogEntries()[0]?.upstreamError).toBe(message);
-    expect(readUsageEntries()[0]?.upstreamError).toBe(message);
+    expect(getRequestLogEntries()[0]?.upstreamError).toBeUndefined();
+    expect(readUsageEntries()[0]?.upstreamError).toBeUndefined();
     expect(readUsageEntries()[0]?.diagnostics?.errorMessage).toBeUndefined();
   });
 
-  test("HTTP endpoint errors survive display persistence while diagnostic copies stay strict", () => {
+  test("HTTP endpoint errors do not persist upstream text or URLs", () => {
     for (const message of ["Not Found: /v1/chat/completions", "POST /v1/responses returned 502"]) {
       clearRequestLogsForTests();
       const diagnostics = createTransactionDiagnostics({ receivedAt: 1 });
       diagnostics.errorMessage = message;
       addRequestLog({ requestId: "endpoint-error", timestamp: 1, provider: "test", model: "test", status: 502,
         durationMs: 1, usageStatus: "unreported", upstreamError: message, diagnostics });
-      expect(getRequestLogEntries()[0]?.upstreamError).toBe(message);
-      expect(readUsageEntries().at(-1)?.upstreamError).toBe(message);
+      expect(getRequestLogEntries()[0]?.upstreamError).toBeUndefined();
+      expect(readUsageEntries().at(-1)?.upstreamError).toBeUndefined();
       expect(readUsageEntries().at(-1)?.diagnostics?.errorMessage).toBeUndefined();
     }
     for (const message of ["failed: /v1/responses/private-file", "failed: ../private/file", "failed: /home/person/file",

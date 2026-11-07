@@ -272,6 +272,7 @@ export default function CodexAccountPool({ apiBase, accountModeState = null, ban
 
   const editAlias = async (account: CodexAccountEntry) => {
     const entered = await requestTextValue({
+      title: t("prov.editAlias"),
       message: t("prov.aliasPrompt"),
       initialValue: account.alias ?? "",
       maxLength: CREDENTIAL_ALIAS_MAX_LENGTH,

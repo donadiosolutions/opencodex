@@ -78,12 +78,12 @@ describe("xAI Responses include compatibility", () => {
   });
 
   for (const baseUrl of ["https://chatgpt.com/backend-api/codex", "https://gateway.example/v1", "https://api.x.ai.evil.example/v1", "https://api.x.ai:444/v1"]) {
-    test(`preserves include entries and caller input outside xAI at ${baseUrl}`, () => {
+    test(`strips private include and preserves caller input outside xAI at ${baseUrl}`, () => {
       const raw = { include: ["output.encrypted_content", "reasoning.encrypted_content"], input: [] };
       const before = structuredClone(raw);
       const body = buildBody(xaiOauthResponses({ baseUrl, authMode: "key" }), raw);
 
-      expect(body.include).toEqual(raw.include);
+      expect(body.include).toEqual(["reasoning.encrypted_content"]);
       expect(raw).toEqual(before);
     });
   }

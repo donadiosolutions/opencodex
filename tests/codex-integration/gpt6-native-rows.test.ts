@@ -83,11 +83,11 @@ const LUNA_LADDER = ["low", "medium", "high", "xhigh", "max"];
 describe("GPT-6.1 Sol, GPT-6 Sol and Luna are self-described flagship natives", () => {
   test("each projects its own roster row with its own label, windows and exact ladder", () => {
     const cases = [
-      { slug: NATIVE_GPT61_SOL_MODEL, wire: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", ladder: SOL_LADDER, defaultEffort: "low" },
-      { slug: NATIVE_GPT6_SOL_MODEL, wire: "gpt-6-sol", displayName: "GPT-6-Sol", ladder: SOL_LADDER, defaultEffort: "medium" },
-      { slug: NATIVE_GPT6_LUNA_MODEL, wire: "gpt-6-luna", displayName: "GPT-6-Luna", ladder: LUNA_LADDER, defaultEffort: "medium" },
+      { slug: NATIVE_GPT61_SOL_MODEL, wire: "gpt-6.1-sol", displayName: "GPT-6.1-Sol", ladder: SOL_LADDER, defaultEffort: "low", defaultWindow: 500_000 },
+      { slug: NATIVE_GPT6_SOL_MODEL, wire: "gpt-6-sol", displayName: "GPT-6-Sol", ladder: SOL_LADDER, defaultEffort: "medium", defaultWindow: 272_000 },
+      { slug: NATIVE_GPT6_LUNA_MODEL, wire: "gpt-6-luna", displayName: "GPT-6-Luna", ladder: LUNA_LADDER, defaultEffort: "medium", defaultWindow: 272_000 },
     ];
-    for (const { slug, wire, displayName, ladder, defaultEffort } of cases) {
+    for (const { slug, wire, displayName, ladder, defaultEffort, defaultWindow } of cases) {
       expect(slug).toBe(wire);
       expect(SELF_DESCRIBED_NATIVE_OPENAI_MODELS.has(slug)).toBe(true);
       expect(isNativeOpenAiCapabilityAliasModel(slug)).toBe(false);
@@ -102,8 +102,8 @@ describe("GPT-6.1 Sol, GPT-6 Sol and Luna are self-described flagship natives", 
         context_window: 272_000,
         max_context_window: 872_000,
       });
-      expect(nativeOpenAiContextWindow(slug)).toBe(272_000);
-      expect(nativeOpenAiContextTier(slug)).toEqual({ defaultWindow: 272_000, longWindow: 872_000 });
+      expect(nativeOpenAiContextWindow(slug)).toBe(defaultWindow);
+      expect(nativeOpenAiContextTier(slug)).toEqual({ defaultWindow, longWindow: 872_000 });
       expect(nativeReasoningEfforts(slug)).toEqual(ladder);
       expect(nativeDefaultReasoningEffort(slug)).toBe(defaultEffort);
       expect(nativeInputModalities(slug)).toEqual(["text", "image"]);
@@ -121,9 +121,8 @@ describe("GPT-6.1 Sol, GPT-6 Sol and Luna are self-described flagship natives", 
     expect(sol61?.display_name).toBe("GPT-6.1-Sol");
     expect(efforts(sol61)).toEqual(SOL_LADDER);
     expect(sol61?.default_reasoning_level).toBe("low");
-    expect(sol61?.context_window).toBe(272_000);
-    // Without an opt-in, the built row advertises the effective default window.
-    expect(sol61?.max_context_window).toBe(272_000);
+    expect(sol61?.context_window).toBe(500_000);
+    expect(sol61?.max_context_window).toBe(872_000);
     expect(sol61?.service_tiers).toEqual([{ id: "priority", name: "Fast", description: "2x speed, increased usage" }]);
     const sol = entries.find(entry => entry.slug === NATIVE_GPT6_SOL_MODEL);
     const luna = entries.find(entry => entry.slug === NATIVE_GPT6_LUNA_MODEL);

@@ -203,10 +203,10 @@ describe("account-scoped native Ultrafast catalog metadata", () => {
   test("all catalog publication paths apply the authenticated tier projection", () => {
     const convergence = readFileSync(repoPath("src", "codex", "convergence.ts"), "utf8");
     const retainedSync = readFileSync(repoPath("src", "codex", "catalog", "retained-sync.ts"), "utf8");
-    const serveOptions = readFileSync(repoPath("src", "server", "index", "serve-options.ts"), "utf8");
-    expect(convergence).toContain("applyNativeUltraFastTier(catalog.models, modelEntitlements, accountTargets, config.ultraFastTier === true, bareEligibleAccountIds)");
+    const modelList = readFileSync(repoPath("src", "server", "codex-model-list.ts"), "utf8");
+    expect(convergence).toContain("applyNativeUltraFastTier(mergedModels, modelEntitlements, accountTargets, config.ultraFastTier === true, bareEligibleAccountIds)");
     expect(retainedSync).toContain("applyNativeUltraFastTier(catalog.models, modelEntitlements, accountTargets, config.ultraFastTier === true, bareEligibleAccountIds)");
-    expect(serveOptions).toContain("applyNativeUltraFastTier(entries, modelEntitlements, accountTargets, config.ultraFastTier === true, bareEligibleAccountIds)");
+    expect(modelList).toContain("applyNativeUltraFastTier(entries, modelEntitlements, accountTargets, config.ultraFastTier === true, bareEligibleAccountIds)");
   });
 });
 

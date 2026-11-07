@@ -2296,7 +2296,7 @@ describe("server local API auth", () => {
         "caller-keyring-account",
       ]);
       expect(getRequestLogEntries().slice(-3).map(entry => entry.accountLogLabel))
-        .toEqual(["main", "main", "main"]);
+        .toEqual([undefined, undefined, undefined]);
       const active = await originalGlobalFetch(new URL("/api/codex-auth/active", harness.server.url), {
         headers: managementHeaders(),
       }).then(response => response.json()) as { activeCodexAccountId?: string; pinnedAccountId?: string | null };

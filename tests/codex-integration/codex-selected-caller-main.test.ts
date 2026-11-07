@@ -12,9 +12,8 @@ import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import {
   clearAccountNeedsReauth,
   clearAccountQuota,
-  handleCodexAuthAPI,
-  markAccountNeedsReauth,
 } from "../../src/codex/auth-api";
+import { handleCodexAuthAPI } from "../../src/codex/auth-api/routes";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
 import { clearCodexUpstreamHealth, clearThreadAccountMap } from "../../src/codex/routing";
 import {
@@ -101,7 +100,7 @@ describe("selected caller-owned main", () => {
       await expect(resolveCodexAuthContext(callerHeaders(), cfg, "pool", {
         requestScopedMainCredential: true,
         beginCodexAccountSelection: codexAccountSelectionForTurn(turn!),
-      })).resolves.toEqual({ kind: "main", accountId: null });
+      })).resolves.toMatchObject({ kind: "main", accountId: null });
     } finally {
       turn?.release();
       drain?.release();
@@ -198,7 +197,6 @@ describe("selected caller-owned main", () => {
     cfg.activeCodexAccountId = MAIN_CODEX_ACCOUNT_ID;
     cfg.activeCodexAccountPinned = MAIN_CODEX_ACCOUNT_ID;
     savePoolCredential();
-    markAccountNeedsReauth(MAIN_CODEX_ACCOUNT_ID, Number.MAX_SAFE_INTEGER);
     const context = await resolveCodexAuthContext(callerHeaders(), cfg, "pool", {
       modelId: "gpt-daybreak-blue-latest",
       requestScopedMainCredential: true,

@@ -694,7 +694,7 @@ describe("handleResponses Codex WS relay selection", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-eager-handoff-"));
     process.env.OPENCODEX_HOME = home;
     resetUsageReadCacheForTests();
-    try {
+    try { takeSpendHome();
       const frames = [
         { type: "response.created", response: { id: "handoff-response" } },
         { type: "response.output_text.delta", response_id: "handoff-response", delta: "fixture text" },
@@ -730,7 +730,7 @@ describe("handleResponses Codex WS relay selection", () => {
       });
       expect(reference.status).toBe(response.status);
       expect(await reference.text()).toBe(actual);
-    } finally {
+    } finally { releaseSpendHome?.();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       resetUsageReadCacheForTests();
@@ -743,7 +743,7 @@ describe("handleResponses Codex WS relay selection", () => {
     const home = mkdtempSync(join(tmpdir(), "ocx-eager-disconnect-"));
     process.env.OPENCODEX_HOME = home;
     resetUsageReadCacheForTests();
-    try {
+    try { takeSpendHome();
       installFake(ws => {
         ws.emit("open", {});
         ws.emit("message", { data: JSON.stringify({ type: "response.created", response: { id: "drain-response" } }) });
@@ -779,7 +779,7 @@ describe("handleResponses Codex WS relay selection", () => {
       expect(rows[0]?.diagnostics?.downstreamTerminalSentAt).toBeUndefined();
       expect(rows[0]?.diagnostics?.downstreamClosedAt).toBeNumber();
       if (terminalArrives) expect(rows[0]?.diagnostics?.cancellationReason).toBe("client_disconnect");
-    } finally {
+    } finally { releaseSpendHome?.();
       if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
       else process.env.OPENCODEX_HOME = previousHome;
       resetUsageReadCacheForTests();

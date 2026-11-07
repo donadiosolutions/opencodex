@@ -172,8 +172,8 @@ describe("enforce-pr-target workflow", () => {
     //
     // `status` has no pull_request payload and sources from the default branch
     // that supplied the privileged workflow. A `main`-targeting PR sources
-    // from `main` so the workflow definition and the scripts match. Everything
-    // else resolves to `dev`.
+    // from `main` so the workflow definition and the scripts match. The
+    // donadiosolutions fork's `custom` base uses `custom`; other bases use `dev`.
     //
     // Exact equality, not fragment matching: separate checks for `status`,
     // `main`, and `dev` would all pass with the operator grouping wrong or a
@@ -182,7 +182,7 @@ describe("enforce-pr-target workflow", () => {
     assert.ok(ref, "trusted checkout must declare ref");
     assert.equal(
       ref.replace(/\s+/g, " ").trim(),
-      "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}",
+      "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || (github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev')) }}",
     );
     assert.doesNotMatch(ref, /base\.sha|head\.(?:sha|ref)/);
     // Pinning the checkout ref only gates one step. A later `run:` or
@@ -215,7 +215,7 @@ describe("enforce-pr-target workflow", () => {
     const checkouts = workflow.match(/uses:\s*actions\/checkout@[\s\S]*?(?=\n {6}- name:|$)/g) ?? [];
     for (const step of checkouts) {
       const stepRef = (step.match(/^\s*ref:\s*(.+)$/m)?.[1] ?? "").replace(/\s+/g, " ").trim();
-      assert.equal(stepRef, "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || 'dev') }}", "every checkout must use the trusted ref");
+      assert.equal(stepRef, "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || (github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev')) }}", "every checkout must use the trusted ref");
       assert.doesNotMatch(step, /repository:/, "a checkout must not retarget its repository");
     }
     // Checkout is not the only way to obtain PR-controlled code. A `run:` step

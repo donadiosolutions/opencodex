@@ -506,25 +506,25 @@ describe("GET /api/logs account identity", () => {
     addRequestLog(baseEntry({
       requestId: "pool-row",
       provider: "openai",
-      accountLogLabel: "p3f9a1",
+      accountLogLabel: "p03f9a1",
       attempts: [
         { ordinal: 1, provider: "openai", model: "gpt-test", adapter: "openai-responses", status: 429, durationMs: 4, sendCount: 1, recoveryKinds: [], usageStatus: "unreported", accountLogLabel: "main" },
-        { ordinal: 2, provider: "openai", model: "gpt-test", adapter: "openai-responses", status: 200, durationMs: 6, sendCount: 1, recoveryKinds: [], usageStatus: "reported", accountLogLabel: "p3f9a1" },
+        { ordinal: 2, provider: "openai", model: "gpt-test", adapter: "openai-responses", status: 200, durationMs: 6, sendCount: 1, recoveryKinds: [], usageStatus: "reported", accountLogLabel: "p03f9a1" },
       ],
     }));
     addRequestLog(baseEntry({ requestId: "unlabelled-row", provider: "xai" }));
 
     const all = await readLogPoll("limit=2000");
     const pool = all.logs.find(row => row.requestId === "pool-row")!;
-    expect(pool.accountLogLabel).toBe("p3f9a1");
+    expect(pool.accountLogLabel).toBe("p03f9a1");
     expect((pool.attempts as Array<Record<string, unknown>>).map(attempt => attempt.accountLogLabel))
-      .toEqual(["main", "p3f9a1"]);
+      .toEqual(["main", "p03f9a1"]);
     expect(all.logs.find(row => row.requestId === "unlabelled-row")!.accountLogLabel).toBeUndefined();
 
     // The pool row is reachable through the account that REFUSED it as well as the one that
     // served it, which is what makes the filter usable for quota debugging.
     expect((await readLogPoll("account=main")).logs.map(row => row.requestId)).toEqual(["main-row", "pool-row"]);
-    expect((await readLogPoll("account=p3f9a1")).logs.map(row => row.requestId)).toEqual(["pool-row"]);
+    expect((await readLogPoll("account=p03f9a1")).logs.map(row => row.requestId)).toEqual(["pool-row"]);
     expect((await readLogPoll("account=p000000")).logs).toEqual([]);
   });
 });
@@ -642,10 +642,15 @@ describe("estimated decode rate (#4038)", () => {
       durationMs: 20_000,
       usage: { inputTokens: 10, outputTokens: 400 },
       attempts: [{
+        ordinal: 1,
         provider: "anthropic",
         model: "claude-3-haiku-20240307",
+        adapter: "anthropic-messages",
+        status: 200,
         durationMs: 10_000,
         firstOutputMs: 2_000,
+        sendCount: 1,
+        recoveryKinds: [],
         usageStatus: "reported",
         usage: { inputTokens: 10, outputTokens: 240 },
       }],

@@ -626,7 +626,7 @@ describe("multiAgentGuidanceText", () => {
       { injectionModel: "anthropic/claude-sonnet-5" },
     );
     expect(text).toContain('"anthropic/claude-sonnet-5"');
-    expect(text).toContain("OpenCodex sub-agent routing metadata");
+    expect(text).toStartWith("<opencodex_subagent_guidance>");
     expect(text).not.toContain("Proactive multi-agent delegation is active");
     // and WITHOUT an injectionModel it stays silent (codex-rs owns the v2 Proactive text)
     expect(await multiAgentGuidanceText(parsedFixture({ reasoning: "ultra", tools: nativeV2 }))).toBeNull();
@@ -668,7 +668,7 @@ describe("multiAgentGuidanceText", () => {
       injectionEffort: "xhigh",
       subagentModels: ["gpt-5.6-terra"],
     });
-    expect(text).toContain("OpenCodex sub-agent routing metadata");
+    expect(text).toStartWith("<opencodex_subagent_guidance>");
     expect(text).not.toMatch(/hidden|not in the schema|never claim/i);
     expect(text).toContain('(reasoning_effort high/max/ultra): "gpt-5.6-terra"');
   });
@@ -799,7 +799,7 @@ describe("multiAgentGuidanceText", () => {
       parsedFixture({ reasoning: "medium", tools: [{ name: "spawn_agent" }] }),
       { subagentModels: ["gpt-5.6-terra"] },
     );
-    expect(text).toContain("OpenCodex sub-agent routing metadata");
+    expect(text).toStartWith("<opencodex_subagent_guidance>");
     expect(text).not.toMatch(/hidden|not in the schema|never claim/i);
     expect(text).toContain('(reasoning_effort high/max/ultra): "gpt-5.6-terra"');
     expect(text).not.toContain("Preferred sub-agent");

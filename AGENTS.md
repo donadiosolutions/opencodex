@@ -394,7 +394,11 @@ than nudged.
 
 ## Branch policy
 
-- `dev` — the single integration branch and the target for every pull request.
+In `donadiosolutions/opencodex`, fork-specific pull requests target `custom`;
+the fork's target gate also continues to accept `dev`. The upstream policy below
+is unchanged.
+
+- `dev` — the upstream integration branch and target for its pull requests.
 - `main` — release branch. It only moves by maintainer-controlled promotion
   from `dev` (releases, docs deploys). Do not open feature PRs against `main`.
 - `preview` — prerelease train (`x.y.z-preview.*` versions).
@@ -460,8 +464,9 @@ reviewers (Codex, CodeRabbit).
   language. Be detailed and specific: name the file and line, describe the
   concrete failure mode, and suggest a fix. Avoid vague or purely stylistic
   commentary.
-- **Branch targeting:** flag any pull request that does not target `dev`
-  (releases and maintainer promotions are the only exceptions).
+- **Branch targeting:** flag any upstream pull request that does not target
+  `dev`; in `donadiosolutions/opencodex`, accept `custom` for fork changes
+  (releases and maintainer promotions remain exceptions).
 - **Security boundary (highest priority):** changes touching authentication,
   credential/token handling, OAuth flows, GitHub Actions workflows, release
   automation (`scripts/release.ts`, `.github/workflows/release.yml`), or

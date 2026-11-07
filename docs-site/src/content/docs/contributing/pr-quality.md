@@ -35,7 +35,8 @@ on your behalf.
 Three deterministic checks run before human review, and each failure message
 tells you exactly what to change:
 
-- **PR quality (`enforce-target`).** Pull requests must target `dev` and carry
+- **PR quality (`enforce-target`).** Upstream pull requests must target `dev`;
+  the `donadiosolutions/opencodex` fork also accepts `custom`. PRs must carry
   a real description: a **Summary** of what changed and why, plus a **Test
   plan** (or equivalent substance). When the diff changes files under `gui/`, or
   when GitHub returns an incomplete changed-file list for a large diff, the

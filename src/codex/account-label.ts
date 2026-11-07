@@ -61,7 +61,7 @@ export function codexAuthContextLogLabel(
   authCtx: CodexAuthContext,
   config: Pick<OcxConfig, "codexAccounts">,
 ): "main" | `p${string}` | undefined {
-  if (authCtx.kind === "main" && authCtx.selectedMain === true) return "main";
+  if (authCtx.kind === "main" && "selectedMain" in authCtx && authCtx.selectedMain === true) return "main";
   if (authCtx.kind !== "pool" && authCtx.kind !== "main-pool") return undefined;
   if (authCtx.accountId === MAIN_CODEX_ACCOUNT_ID) return "main";
   const account = (config.codexAccounts ?? []).find(candidate => candidate.id === authCtx.accountId);

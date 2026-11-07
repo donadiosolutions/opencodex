@@ -251,7 +251,7 @@ describe("Azure Responses include compatibility", () => {
     expect(JSON.parse(request.body).include).toEqual(["reasoning.encrypted_content"]);
   });
 
-  test("preserves includes on unrelated and lookalike destinations", async () => {
+  test("keeps the private include only on the official OpenAI destination", async () => {
     const { createResponsesPassthroughAdapter } = await import("../../src/adapters/openai-responses");
     for (const baseUrl of [
       "https://api.openai.com/v1",
@@ -264,7 +264,12 @@ describe("Azure Responses include compatibility", () => {
       const request = await adapter.buildRequest({
         ...parsed, _rawBody: { ...parsed._rawBody, include: ["output.encrypted_content"] },
       }, { headers: new Headers() });
-      expect(JSON.parse(request.body).include).toEqual(["output.encrypted_content"]);
+      const body = JSON.parse(request.body);
+      if (baseUrl === "https://api.openai.com/v1") {
+        expect(body.include).toEqual(["output.encrypted_content"]);
+      } else {
+        expect(body).not.toHaveProperty("include");
+      }
     }
   });
 });

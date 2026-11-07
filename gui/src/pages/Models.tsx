@@ -1471,7 +1471,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
           {recentForProvider.length > 0 && <span className="models-chip mono text-caption">{t("models.newCount", { count: recentForProvider.length })}</span>}
           </button>
            <div className="row models-provider-actions">
-             <button type="button" className="btn btn-ghost btn-sm models-alias-edit" aria-label={t("models.editProviderAlias")} title={t("models.editProviderAlias")} onClick={() => void saveProviderAlias(provider)}><IconPencil style={{ width: 14, height: 14 }} /></button>
+             <button type="button" className="btn btn-ghost btn-sm models-alias-edit" aria-haspopup="dialog" aria-label={t("models.editProviderAlias")} title={t("models.editProviderAlias")} onClick={() => void saveProviderAlias(provider)}><IconPencil style={{ width: 14, height: 14 }} /></button>
             <Switch
               on={aliases.defaults.providers[provider] ?? aliases.defaults.global}
               onClick={() => void setDefaultAliases(!(aliases.defaults.providers[provider] ?? aliases.defaults.global), provider)}
@@ -1722,7 +1722,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
                        )}
                      </span>
                      {aliases.models[provider]?.[m.id]?.source === "builtin" && <span className="models-chip muted text-caption">{t("models.aliasAuto")}</span>}
-                     <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} title={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, m.id)}><IconPencil style={{ width: 13, height: 13 }} /></button>
+                     <button type="button" className="btn btn-ghost btn-sm" aria-haspopup="dialog" aria-label={t("models.editModelAlias")} title={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, m.id)}><IconPencil style={{ width: 13, height: 13 }} /></button>
                      {!m.native && !m.custom && (
                        <button
                          type="button"
@@ -2134,7 +2134,7 @@ export default function Models({ apiBase, restartEpoch = 0, connected = false, c
               <strong className="mono text-control">{value.alias}</strong>
               <span className="models-chip muted text-caption">{value.source === "builtin" ? t("models.aliasAuto") : t("models.aliasUser")}</span>
               {value.stale && <span className="badge badge-amber">{t("models.aliasStale")}</span>}
-              <button type="button" className="btn btn-ghost btn-sm" aria-label={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, model)}><IconPencil style={{ width: 13, height: 13 }} /></button>
+              <button type="button" className="btn btn-ghost btn-sm" aria-haspopup="dialog" aria-label={t("models.editModelAlias")} onClick={() => void saveModelAlias(provider, model)}><IconPencil style={{ width: 13, height: 13 }} /></button>
             </div>
           )))}
         </div>

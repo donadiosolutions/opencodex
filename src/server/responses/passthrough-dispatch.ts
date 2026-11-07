@@ -51,16 +51,11 @@ import {
   codexTransientProbeGrant,
   createCodexAuthDispatchGuard,
 } from "../../codex/auth-context";
-import {
-  restoreRoutedNamespaceCalls,
-} from "../../responses/namespace-tool-compat";
+import { restoreRoutedNamespaceCalls } from "../../responses/namespace-tool-compat";
 import { restoreRoutedCustomCalls } from "../../responses/custom-tool-compat";
 import { formatErrorResponse } from "../../bridge";
 import { redactSecretString } from "../../lib/redact";
-import {
-  collectFunctionCallRepairSchemas,
-  repairFunctionCallsInJson,
-} from "../../responses/function-call-compat";
+import { collectFunctionCallRepairSchemas, repairFunctionCallsInJson } from "../../responses/function-call-compat";
 import type { RoutedNamespaceToolAliases } from "../../responses/namespace-tool-compat";
 import { hasResponsesSnapshotRepair, repairResponsesSnapshotJson } from "../responses-snapshot-repair";
 import { backfillResponsesFieldsJson } from "./responses-field-backfill";
@@ -69,10 +64,7 @@ import { isXaiResponsesDestination, resolveProviderTransport } from "../../provi
 import { CODE_MODE_EXEC_TOOL_NAME } from "../../types";
 import type { ResponsesTerminalStatus } from "../../bridge";
 import { hasPassiveAccountQuota, recordPassiveAccountQuota } from "../../providers/quota";
-import {
-  isMuseSubscriptionUsagePayload,
-  parseMuseSubscriptionUsage,
-} from "../../providers/muse-subscription-usage";
+import { isMuseSubscriptionUsagePayload, parseMuseSubscriptionUsage } from "../../providers/muse-subscription-usage";
 import { restoreMuseToolNames } from "../../responses/muse-tool-name-alias";
 import { restorePlaintextV2AgentMessageCalls } from "../../responses/plaintext-v2-agent-messages";
 import {
@@ -138,11 +130,7 @@ import { captureAccountAutoPauseAttempt, wasAccountAutoPaused, wasPermanentAccou
 import { codexFailureWindowOutcomeMeta, recordCodexUpstreamOutcome } from "../../codex/routing";
 import { describeUpstreamConnectFailure } from "./upstream-error";
 import type { OpaqueBlobRecoveryGuard } from "./core-opaque-recovery";
-import {
-  rateLimitRetryPolicyFor,
-  rateLimitRetryDelayMs,
-  transientRetryPolicyFor,
-} from "../../providers/key-failover";
+import { rateLimitRetryPolicyFor, rateLimitRetryDelayMs, transientRetryPolicyFor } from "../../providers/key-failover";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { refreshPoolForwardAuth, refreshNativeMainForwardAuth, withClaudeNativeSession } from "./core-auth";

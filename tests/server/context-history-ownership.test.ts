@@ -173,9 +173,10 @@ test("Direct caller context never borrows stored login or proxy admission", asyn
 
 test("Direct proxy-bearer model and notes use stored main without leaking the proxy secret", async () => {
   const cfg = config(); cfg.providers.openai.codexAccountMode = "direct";
+  cfg.apiKeys = [{ id: "k1", name: "proxy", key: "ocx_data_test_key", createdAt: new Date().toISOString() }];
   const token = `header.${Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString("base64url")}.signature`;
   writeFileSync(join(home, "auth.json"), JSON.stringify({ tokens: { access_token: token, account_id: "physical-main" } }));
-  const admission = { kind: "environment", source: "bearer", contextPrincipalId: principal } as const;
+  const admission = { ...keyAdmission, source: "bearer" } as const;
   const headers = requestHeaders("root-proxy", "ocx_data_test_key", "untrusted-account");
   expect((await model(cfg, "root-proxy", "gpt-5.5", headers, admission)).status).toBe(200);
   expect(getContextSessionOwner(principal, "root-proxy", destination)).toMatchObject({ kind: "stored", accountId: "__main__" });

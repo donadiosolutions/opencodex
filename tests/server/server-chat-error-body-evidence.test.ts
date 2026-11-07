@@ -9,6 +9,10 @@ import { createBoundedResponseLogBody } from "../../src/server/response-log-body
 import type { RequestLogContext } from "../../src/server/request-log";
 
 const KEY = "zq7Vb2LmN4pX9tR1sK8wD3fH6jY0cA5e";
+const captureClockFields = new Set(["transactionId", "receivedAt", "upstreamHeadersAt", "downstreamTerminalSentAt", "finalizedAt", "at", "elapsedMs"]);
+function withoutCaptureClocks(value: unknown): unknown {
+  return JSON.parse(JSON.stringify(value, (key, item) => captureClockFields.has(key) ? undefined : item));
+}
 for (const [status, code, message] of [[429, "rate_limit_exceeded", "rate limit"], [500, "insufficient_quota", "quota exhausted"],
   [400, "cyber_policy", "cyber policy"], [400, "model_not_in_plan", "plan refusal"], [429, "upstream_reset_replay_refused", "connection closed"],
   [403, "model_not_allowed_for_key", "not allowed"], [400, "usage_limit_reached", "usage limit reached"], [401, "invalid_api_key", "invalid api key"]] as const) {
@@ -66,7 +70,8 @@ for (const end of ["eof", "cancel", "chunk-cancel", "read-error"] as const) {
       const before = await inspect(false); const after = await inspect(true);
       // Timing fields belong to the request clock, not body inspection.
       for (const result of [before, after]) for (const row of result.rows as Array<Record<string, unknown>>) { delete row.timestamp; delete row.latencyMs; delete row.ttfbMs; delete row.durationMs; }
-      expect(after).toEqual(before);
+      for (const result of [before, after]) expect(JSON.stringify(result.rows)).not.toContain(KEY);
+      expect(withoutCaptureClocks(after)).toEqual(withoutCaptureClocks(before));
     });
   }
 }
@@ -98,7 +103,7 @@ test("deferred legacy inspection preserves numeric reset and diagnostic projecti
     expect(JSON.stringify(row)).not.toContain(KEY); delete row.durationMs; delete row.timestamp;
     return { row, ctx };
   }
-  expect(await project(true)).toEqual(await project(false));
+  expect(withoutCaptureClocks(await project(true))).toEqual(withoutCaptureClocks(await project(false)));
 });
 
 test("combo rebuilding carries only the original local response identity", async () => {

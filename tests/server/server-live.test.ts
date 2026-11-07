@@ -562,11 +562,9 @@ test("a routed pool account's token overrides the caller bearer on the live rela
 });
 
 test("call-create and its sideband join bind to the same pool account (openai/codex #35830)", async () => {
-  // Desktop v3 voice: POST /v1/live creates the WebRTC call under the proxy-selected Pool
-  // account; the sideband join must reach OpenAI under that SAME account or the call is not
-  // found (404). Both legs carry codex-rs build_session_headers (session-id + thread-id), so
-  // the pool affinity key is identical — a round-robin pool with two accounts must not hand
-  // the join to the other account.
+  // Desktop v3 voice creates a call under the proxy-selected Pool account; joining under
+  // another account returns 404. Both legs carry identical session-id + thread-id affinity.
+  // Pause caller-owned main so round-robin exercises only the two stored accounts.
   const captured: CapturedRequest[] = [];
   const upstream = fakeLiveUpstream(captured);
   const seenUpgradeHeaders: Headers[] = [];
@@ -584,6 +582,7 @@ test("call-create and its sideband join bind to the same pool account (openai/co
   saveConfig({
     ...forwardConfig(),
     accountPoolStrategy: "round-robin",
+    pausedCodexAccountIds: ["__main__"],
     providers: {
       openai: {
         adapter: "openai-responses",

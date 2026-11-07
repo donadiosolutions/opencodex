@@ -1110,13 +1110,14 @@ describe("unpaired tool result boundary (#3259)", () => {
       .toEqual(["do the task", delegationPayload]);
   });
 
-  test("a delegation-shaped carrier with an empty call id remains an unusable tool result", () => {
-    const result = toolResultOf({
+  test("a delegation-shaped carrier with an empty call id becomes user input", () => {
+    const parsed = parseRequest(delegationHistory({
       type: "function_call_output", id: "fco_valid", name: "create_thread", namespace: "codex_app",
       call_id: "", output: delegationPayload,
-    });
-    expect(result).toBeDefined();
-    expect(typeof result?.toolCallId !== "string" || result.toolCallId.length === 0).toBe(true);
+    }));
+    expect(parsed.context.messages.some(message => message.role === "toolResult")).toBe(false);
+    expect(parsed.context.messages.filter(message => message.role === "user").map(message => message.content))
+      .toEqual(["do the task", delegationPayload]);
   });
 
   test("a well-formed tool result on the same history pairs normally", () => {

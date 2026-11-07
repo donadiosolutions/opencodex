@@ -17,6 +17,10 @@ const repoRoot = resolveRepoRoot();
  * ignore file, so a forced add fails CI on the commit that introduces it.
  */
 const FORBIDDEN_TRACKED_DIRS = [".codexclaw", ".omo", ".claude", ".agents", "node_modules", ".tmp"];
+const FORK_SKILL_FILES = new Set([
+  ".agents/skills/update-ocx/SKILL.md",
+  ".agents/skills/update-ocx/agents/openai.yaml",
+]);
 
 const FORBIDDEN_TRACKED_FILENAMES = [".DS_Store", "Thumbs.db"];
 
@@ -91,8 +95,11 @@ function trackedEntries(): { mode: string; path: string }[] {
 
 describe("repository hygiene", () => {
   test("no local agent or session state is tracked", () => {
+    const remote = Bun.spawnSync(["git", "remote", "get-url", "origin"], { cwd: repoRoot });
+    const forkOrigin = remote.exitCode === 0 && /^(?:https:\/\/github\.com\/|git@github\.com:)donadiosolutions\/opencodex(?:\.git)?$/.test(new TextDecoder().decode(remote.stdout).trim());
     const offenders = trackedFiles().filter((path) =>
-      path.split("/").some((segment) => FORBIDDEN_TRACKED_DIRS.includes(segment)),
+      path.split("/").some((segment) => FORBIDDEN_TRACKED_DIRS.includes(segment))
+      && !(forkOrigin && FORK_SKILL_FILES.has(path)),
     );
 
     expect(offenders).toEqual([]);

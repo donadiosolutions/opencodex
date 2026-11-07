@@ -19,7 +19,17 @@ import { initializeRecoveryAvailability, captureRecoveryDispatch, captureReplayR
 import { recordAuthSend } from "./transaction-auth-capture";
 
 const clocks = new WeakMap<TransactionDiagnosticsV1, { start: number; output?: number; terminal?: number; sent?: number; event?: number; firstEvent?: number; connect?: number; finalized?: number; lastSend?: DiagnosticSendV1 }>();
-const sendOwners = new WeakMap<object, { sendCount: number; sends?: DiagnosticSendV1[] }>();
+type SendOwner = { attemptId?: string; sendCount: number; sends?: DiagnosticSendV1[] };
+const sendOwners = new WeakMap<object, SendOwner>();
+
+function sendOwnerFor(attempt: NonNullable<RequestLogContext["activeAttempt"]>): SendOwner {
+  let owner = sendOwners.get(attempt);
+  if (!owner || owner.attemptId !== attempt.attemptId) {
+    owner = { attemptId: attempt.attemptId, sendCount: 0 };
+    sendOwners.set(attempt, owner);
+  }
+  return owner;
+}
 
 /** Adapter-owned I/O may bypass the supplied fetch. Keep that invocation count
  * without inventing a physical send; a used executor owns even a rejected send. */
@@ -28,6 +38,7 @@ export async function captureAdapterExecution<T>(ctx: RequestLogContext,
   execute: (executor: ProviderFetch) => Promise<T>,
 ): Promise<T> {
   let attempt: RequestLogContext["activeAttempt"];
+  let attemptId: string | undefined;
   let invoked = false;
   let observed = executor;
   captureSafely(() => {
@@ -44,14 +55,14 @@ export async function captureAdapterExecution<T>(ctx: RequestLogContext,
       unpacedFetch: executor.unpacedFetch ? mark(executor.unpacedFetch) : undefined,
     });
     attempt = ctx.activeAttempt;
+    attemptId = attempt?.attemptId;
     observed = wrapped;
   });
   try { return await execute(observed); }
   finally {
     captureSafely(() => {
-      if (!attempt || invoked) return;
-      let owner = sendOwners.get(attempt);
-      if (!owner) { owner = { sendCount: 0 }; sendOwners.set(attempt, owner); }
+      if (!attempt || invoked || attempt.attemptId !== attemptId) return;
+      const owner = sendOwnerFor(attempt);
       owner.sendCount += 1;
       attempt.sendCount = owner.sendCount;
     });
@@ -400,8 +411,7 @@ export function recordForwardedRequest(ctx: RequestLogContext, transport: "http"
     recordAuthSend(ctx);
     if (attempt) {
       attempt.upstreamTransport = attempt.upstreamTransport && attempt.upstreamTransport !== transport ? "mixed" : transport;
-      let owner = sendOwners.get(attempt);
-      if (!owner) { owner = { sendCount: 0 }; sendOwners.set(attempt, owner); }
+      const owner = sendOwnerFor(attempt);
       const send = beginDiagnosticSend(owner, {
         startedAt: Date.now(), upstreamTransport: transport, endpointClass: d.endpointClass as string,
         provider: ctx.provider, model: ctx.model, adapter: ctx.providerAdapter,
@@ -672,7 +682,7 @@ export function finalizeDiagnostics(ctx: RequestLogContext, status: number, requ
     const d = diagnostics(ctx, requestId, start);
     if (ctx.activeAttempt) {
       const owner = sendOwners.get(ctx.activeAttempt);
-      if (owner) ctx.activeAttempt.sendCount = owner.sendCount;
+      if (owner) ctx.activeAttempt.sendCount = sendOwnerFor(ctx.activeAttempt).sendCount;
     }
     d.terminalMappedStatus = status;
     finishRecoveryCapture(d, status);
@@ -739,7 +749,7 @@ export function transportObserver(ctx: RequestLogContext): (event: TransportObse
   return event => captureSafely(() => {
     if (event.kind === "queue") { pacingObserver(ctx)(event.observation); return; }
     if (event.kind === "prepared") {
-      if (ctx.activeAttempt && !sendOwners.has(ctx.activeAttempt)) sendOwners.set(ctx.activeAttempt, { sendCount: 0 });
+      if (ctx.activeAttempt) sendOwnerFor(ctx.activeAttempt);
       return;
     }
     if (event.kind === "send") {

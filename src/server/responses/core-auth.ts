@@ -61,8 +61,10 @@ export function captureResponsesIngressCredentialOwnership(
   | "authorizationBearerIsProxySecret"
   | "authorizationBearerIsDataPlaneSecret"
 > {
+  // A captured Direct bearer survives internal Request rebuilds; final route validation owns authority.
   const requestScopedMainCredential = options.requestScopedMainCredential
-    ?? (options.admission?.source !== "bearer" && hasForwardableCodexBearer(headers, config));
+    ?? (options.admission?.source !== "bearer"
+      && (hasForwardableCodexBearer(headers, config) || options.callerDirectAuth != null));
   const inboundBearer = headers.get("authorization")?.replace(/^Bearer\s+/i, "").trim() ?? "";
   return {
     requestScopedMainCredential,
