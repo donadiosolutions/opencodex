@@ -1,0 +1,414 @@
+name: bcdn signed image
+
+on:
+  workflow_call:
+    inputs:
+      release_tag:
+        required: true
+        type: string
+      source_sha:
+        required: true
+        type: string
+      source_branch:
+        required: true
+        type: string
+      upstream_tag:
+        required: true
+        type: string
+      upstream_sha:
+        required: true
+        type: string
+    outputs:
+      digest:
+        description: Verified immutable GHCR image digest.
+        value: ${{ jobs.sign.outputs.digest }}
+
+permissions: {}
+
+jobs:
+  prepare:
+    runs-on: blacksmith-4vcpu-ubuntu-2604
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      manifest_sha256: ${{ steps.manifest.outputs.sha256 }}
+    steps:
+      - name: Check out trusted workflow code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Check out selected source as data
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_sha }}
+          path: selected
+          persist-credentials: false
+      - name: Create canonical compatibility manifest
+        id: manifest
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted rev-parse HEAD)" = "${{ github.workflow_sha }}"
+          test "$(git -C selected rev-parse HEAD)" = "$SOURCE_SHA"
+          bash trusted/.github/scripts/bcdn-image-tools.sh bun
+          mkdir -p prepared
+          "$RUNNER_TEMP/bcdn-image-tools/bun" trusted/scripts/generate-compatibility-version.ts selected prepared/compatibility-version.json
+          "$RUNNER_TEMP/bcdn-image-tools/bun" trusted/docker/verify-compatibility.ts selected prepared/compatibility-version.json
+          cp trusted/docker/verify-compatibility.ts prepared/verify-compatibility.ts
+          printf 'sha256=%s\n' "$(sha256sum prepared/compatibility-version.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+      - name: Transfer prepared data
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bcdn-prepared
+          path: prepared/
+          if-no-files-found: error
+          retention-days: 2
+          overwrite: true
+
+  publish:
+    needs: prepare
+    runs-on: blacksmith-4vcpu-ubuntu-2604
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+      existing: ${{ steps.image.outputs.existing }}
+    steps:
+      - name: Check out trusted workflow code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Download prepared data
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bcdn-prepared
+          path: prepared
+      - name: Verify prepared data and install pinned Buildx
+        shell: bash
+        env:
+          EXPECTED_MANIFEST_SHA256: ${{ needs.prepare.outputs.manifest_sha256 }}
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted rev-parse HEAD)" = "${{ github.workflow_sha }}"
+          printf '%s  %s\n' "$EXPECTED_MANIFEST_SHA256" prepared/compatibility-version.json | sha256sum -c -
+          cmp trusted/docker/verify-compatibility.ts prepared/verify-compatibility.ts
+          bash trusted/.github/scripts/bcdn-image-tools.sh buildx
+          bash trusted/.github/scripts/bcdn-image-tools.sh cosign
+          docker buildx create --name bcdn-image --driver docker-container --driver-opt image=moby/buildkit@sha256:de10faf919fc71ba4eb1dd7bd6449566d012b0c9436b1c61bfee21d621b009aa --use
+          docker buildx inspect --bootstrap
+      - name: Authenticate only for registry publication
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Publish or reuse immutable numbered image
+        id: image
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY,,}"
+          image="ghcr.io/$repo"
+          test "$RELEASE_TAG" != latest
+          test "$RELEASE_TAG" != preview
+          test "$RELEASE_TAG" != dev
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          node trusted/.github/scripts/bcdn-image-registry.mjs lookup "$GITHUB_REPOSITORY" "$RELEASE_TAG" \
+            '' '' "$RUNNER_TEMP/bcdn-existing-digest"
+          existing_digest=$(cat "$RUNNER_TEMP/bcdn-existing-digest")
+          if test "$existing_digest" = absent; then
+              context="https://github.com/$GITHUB_REPOSITORY.git#$SOURCE_SHA"
+              staging_tag="build-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+              node trusted/.github/scripts/bcdn-image-registry.mjs lookup "$GITHUB_REPOSITORY" "$staging_tag" \
+                '' '' "$RUNNER_TEMP/bcdn-staging-digest"
+              test "$(cat "$RUNNER_TEMP/bcdn-staging-digest")" = absent
+              export BUILDX_METADATA_PROVENANCE=max
+              docker buildx build --builder bcdn-image --platform linux/amd64 \
+                --file - --build-arg MANIFEST_STAGE=manifest-prepared \
+                --build-arg SOURCE_SHA="$SOURCE_SHA" \
+                --build-arg SOURCE_REPOSITORY="https://github.com/$GITHUB_REPOSITORY" \
+                --build-arg RELEASE_TAG="$RELEASE_TAG" \
+                --build-context prepared="$(pwd)/prepared" \
+                --attest type=provenance,mode=max \
+                --attest type=sbom,generator=docker/buildkit-syft-scanner:stable-1@sha256:873a7458c3c8ac8e32c7b796c10e1600b07b963d2aa000a72a2d97aaaa2d6315 \
+                --tag "$image:$staging_tag" --metadata-file "$RUNNER_TEMP/bcdn-build-metadata.json" --push "$context" \
+                < trusted/Dockerfile
+              digest=$(node -p 'JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8"))["containerimage.digest"]' "$RUNNER_TEMP/bcdn-build-metadata.json")
+              node trusted/.github/scripts/bcdn-image-provenance.mjs "$RUNNER_TEMP/bcdn-build-metadata.json" "$GITHUB_REPOSITORY" "$SOURCE_SHA"
+              printf 'existing=false\n' >> "$GITHUB_OUTPUT"
+          else
+              digest="$existing_digest"
+              printf 'existing=true\n' >> "$GITHUB_OUTPUT"
+          fi
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          node trusted/.github/scripts/bcdn-image-registry.mjs verify "$GITHUB_REPOSITORY" "$digest" \
+            "$SOURCE_SHA" "$RELEASE_TAG" "$RUNNER_TEMP/bcdn-registry-verification.json"
+          if test "$existing_digest" != absent; then
+            identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml@$GITHUB_REF"
+            "$RUNNER_TEMP/bcdn-image-tools/cosign" verify --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              "$image@$digest" > "$RUNNER_TEMP/bcdn-existing-signature.json"
+            gh attestation verify "oci://$image@$digest" --repo "$GITHUB_REPOSITORY" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml" \
+              --signer-digest "$WORKFLOW_SHA" \
+              --predicate-type "https://github.com/$GITHUB_REPOSITORY/attestations/bcdn-release/v1" \
+              --format json > "$RUNNER_TEMP/bcdn-existing-binding.json"
+            node trusted/.github/scripts/bcdn-image-provenance.mjs "$RUNNER_TEMP/bcdn-existing-binding.json" \
+              "$GITHUB_REPOSITORY" "$SOURCE_SHA" "$digest" "$RELEASE_TAG" "$GITHUB_RUN_ID"
+          fi
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$digest" > image-digest.txt
+      - name: Inventory build dependencies inside BuildKit
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          bash trusted/.github/scripts/bcdn-image-tools.sh syft
+          context="https://github.com/$GITHUB_REPOSITORY.git#$SOURCE_SHA"
+          docker buildx build --builder bcdn-image --platform linux/amd64 --target build \
+            --file - --build-arg MANIFEST_STAGE=manifest-prepared \
+            --build-arg SOURCE_SHA="$SOURCE_SHA" \
+            --build-arg SOURCE_REPOSITORY="https://github.com/$GITHUB_REPOSITORY" \
+            --build-arg RELEASE_TAG="$RELEASE_TAG" \
+            --build-context prepared="$(pwd)/prepared" \
+            --output "type=oci,dest=$RUNNER_TEMP/bcdn-build-stage.tar" "$context" \
+            < trusted/Dockerfile
+          mkdir -p build-evidence
+          "$RUNNER_TEMP/bcdn-image-tools/syft" "oci-archive:$RUNNER_TEMP/bcdn-build-stage.tar" --scope squashed \
+            -o spdx-json=build-evidence/build-dependencies.spdx.json \
+            -o cyclonedx-json=build-evidence/build-dependencies.cyclonedx.json
+      - name: Transfer digest and build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bcdn-build-evidence
+          path: |
+            image-digest.txt
+            build-evidence/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  sign:
+    needs: publish
+    runs-on: blacksmith-4vcpu-ubuntu-2604
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    outputs:
+      digest: ${{ steps.promote.outputs.digest }}
+    steps:
+      - name: Check out trusted workflow code
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: trusted
+          persist-credentials: false
+      - name: Download build evidence
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bcdn-build-evidence
+          path: received
+      - name: Install pinned evidence tools and authenticate to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          test "$(git -C trusted rev-parse HEAD)" = "${{ github.workflow_sha }}"
+          bash trusted/.github/scripts/bcdn-image-tools.sh cosign
+          bash trusted/.github/scripts/bcdn-image-tools.sh syft
+          bash trusted/.github/scripts/bcdn-image-tools.sh buildx
+          printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Recover exact published evidence when retrying
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          state=$(node trusted/.github/scripts/bcdn-image-release.mjs "$GITHUB_REPOSITORY" "$RELEASE_TAG")
+          if test "$state" = published; then
+            gh release download "$RELEASE_TAG" --pattern '*' --dir evidence
+            printf 'published=true\n' >> "$GITHUB_OUTPUT"
+          else
+            printf 'published=false\n' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build signed release evidence
+        id: evidence
+        if: steps.release.outputs.published != 'true'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          repo="${GITHUB_REPOSITORY,,}"
+          image="ghcr.io/$repo"
+          digest=$(cat received/image-digest.txt)
+          test "$digest" = '${{ needs.publish.outputs.digest }}'
+          mkdir -p evidence
+          node trusted/.github/scripts/bcdn-image-manifest.mjs create evidence/release-manifest.json \
+            "$GITHUB_REPOSITORY" "$SOURCE_BRANCH" "$SOURCE_SHA" "$UPSTREAM_TAG" "$UPSTREAM_SHA" \
+            "$RELEASE_TAG" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$digest"
+          "$RUNNER_TEMP/bcdn-image-tools/syft" "registry:$image@$digest" --scope squashed \
+            -o spdx-json=evidence/runtime.spdx.json \
+            -o cyclonedx-json=evidence/runtime.cyclonedx.json
+          cp received/build-evidence/* evidence/
+          cp trusted/.github/scripts/bcdn-image-VERIFY.md evidence/VERIFY.md
+          cosign sign --yes "$image@$digest"
+          cosign sign-blob --yes --bundle evidence/release-manifest.sigstore.json evidence/release-manifest.json
+          printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
+          printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
+      - name: Attest GitHub provenance
+        if: steps.release.outputs.published != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.evidence.outputs.image }}
+          subject-digest: ${{ steps.evidence.outputs.digest }}
+          push-to-registry: true
+      - name: Attest release binding
+        if: steps.release.outputs.published != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.evidence.outputs.image }}
+          subject-digest: ${{ steps.evidence.outputs.digest }}
+          predicate-type: https://github.com/${{ github.repository }}/attestations/bcdn-release/v1
+          predicate-path: evidence/release-manifest.json
+          push-to-registry: true
+      - name: Attest runtime SPDX SBOM
+        if: steps.release.outputs.published != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-name: ${{ steps.evidence.outputs.image }}
+          subject-digest: ${{ steps.evidence.outputs.digest }}
+          sbom-path: evidence/runtime.spdx.json
+          push-to-registry: true
+      - name: Verify signatures and exact release binding
+        id: verify
+        shell: bash
+        env:
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          UPSTREAM_TAG: ${{ inputs.upstream_tag }}
+          UPSTREAM_SHA: ${{ inputs.upstream_sha }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+          GHCR_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ github.token }}
+          PUBLISHED: ${{ steps.release.outputs.published }}
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          test "$(cat received/image-digest.txt)" = "$DIGEST"
+          if test "$PUBLISHED" = true; then
+            node trusted/.github/scripts/bcdn-image-evidence.mjs verify evidence
+            output_dir="$RUNNER_TEMP"
+          else
+            output_dir=evidence
+          fi
+          identity="https://github.com/$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml@$GITHUB_REF"
+          cosign verify --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$IMAGE@$DIGEST" > "$output_dir/image-signature-verification.json"
+          cosign verify-blob --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --bundle evidence/release-manifest.sigstore.json evidence/release-manifest.json \
+            > "$output_dir/manifest-signature-verification.txt"
+          node trusted/.github/scripts/bcdn-image-manifest.mjs verify evidence/release-manifest.json \
+            "$DIGEST" "$RELEASE_TAG" "$SOURCE_SHA" "$WORKFLOW_SHA" \
+            "$UPSTREAM_TAG" "$UPSTREAM_SHA" "$SOURCE_BRANCH" "$GITHUB_RUN_ID"
+          node trusted/.github/scripts/bcdn-image-registry.mjs verify "$GITHUB_REPOSITORY" "$DIGEST" \
+            "$SOURCE_SHA" "$RELEASE_TAG" "$output_dir/image-registry-verification.json"
+          if test "$PUBLISHED" = true; then
+            cmp evidence/buildkit-provenance.json "$output_dir/buildkit-provenance.json"
+            cmp evidence/buildkit-sbom.spdx.json "$output_dir/buildkit-sbom.spdx.json"
+          fi
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml" \
+            --signer-digest "$WORKFLOW_SHA" \
+            --predicate-type "https://github.com/$GITHUB_REPOSITORY/attestations/bcdn-release/v1" \
+            --format json > "$output_dir/release-attestation-verification.json"
+          node trusted/.github/scripts/bcdn-image-provenance.mjs "$output_dir/release-attestation-verification.json" \
+            "$GITHUB_REPOSITORY" "$SOURCE_SHA" "$DIGEST" "$RELEASE_TAG" "$GITHUB_RUN_ID"
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml" \
+            --signer-digest "$WORKFLOW_SHA" \
+            --predicate-type 'https://slsa.dev/provenance/v1' \
+            --format json > "$output_dir/github-provenance-verification.json"
+          gh attestation verify "oci://$IMAGE@$DIGEST" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml" \
+            --signer-digest "$WORKFLOW_SHA" \
+            --predicate-type 'https://spdx.dev/Document' \
+            --format json > "$output_dir/github-sbom-verification.json"
+          if test "$PUBLISHED" = true; then
+            cosign verify-blob --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --bundle evidence/SHA256SUMS.sigstore.json evidence/SHA256SUMS
+          else
+            node trusted/.github/scripts/bcdn-image-evidence.mjs create evidence
+            cosign sign-blob --yes --bundle evidence/SHA256SUMS.sigstore.json evidence/SHA256SUMS
+            cosign verify-blob --certificate-identity "$identity" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+              --bundle evidence/SHA256SUMS.sigstore.json evidence/SHA256SUMS
+            node trusted/.github/scripts/bcdn-image-evidence.mjs verify evidence
+          fi
+      - name: Promote only the verified digest to its numbered tag
+        id: promote
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.publish.outputs.digest }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          node trusted/.github/scripts/bcdn-image-registry.mjs lookup "$GITHUB_REPOSITORY" "$RELEASE_TAG" \
+            '' '' "$RUNNER_TEMP/bcdn-tag-before-promotion"
+          before=$(cat "$RUNNER_TEMP/bcdn-tag-before-promotion")
+          if test "$before" = absent; then
+            docker buildx imagetools create --tag "$image:$RELEASE_TAG" "$image@$DIGEST"
+          elif test "$before" != "$DIGEST"; then
+            echo 'Numbered tag changed to a different digest before promotion.' >&2
+            exit 1
+          fi
+          node trusted/.github/scripts/bcdn-image-registry.mjs lookup "$GITHUB_REPOSITORY" "$RELEASE_TAG" \
+            '' '' "$RUNNER_TEMP/bcdn-tag-after-promotion"
+          test "$(cat "$RUNNER_TEMP/bcdn-tag-after-promotion")" = "$DIGEST"
+          printf 'digest=%s\n' "$DIGEST" >> "$GITHUB_OUTPUT"
+      - name: Upload verified release evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bcdn-evidence
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30
+          overwrite: true
