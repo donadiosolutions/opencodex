@@ -49,9 +49,10 @@ function config(): OcxConfig {
 }
 
 function tracedEntry(requestId: string): PersistedUsageEntry {
+  const timestamp = Date.now();
   return {
     requestId,
-    timestamp: 1_700_000_000_000,
+    timestamp,
     provider: "a",
     model: "m1",
     requestedModel: "policy/fast",
@@ -61,7 +62,7 @@ function tracedEntry(requestId: string): PersistedUsageEntry {
     routeDecision: {
       version: 1,
       decisionId: "abc123def456",
-      createdAt: 1_700_000_000_000,
+      createdAt: timestamp,
       requestedModel: "policy/fast",
       routeKind: "policy",
       profile: { id: "fast", revision: "0123456789abcdef" },
@@ -144,7 +145,7 @@ describe("route explainability (RI-09)", () => {
   test("pre-trace rows explain with null routeDecision and their attempts", async () => {
     appendUsageEntry({
       requestId: "legacy-row",
-      timestamp: 1_700_000_000_000,
+      timestamp: Date.now(),
       provider: "a",
       model: "m1",
       status: 503,
@@ -164,7 +165,7 @@ describe("route explainability (RI-09)", () => {
   test("combo rows report the physical final attempt, not the virtual combo model", async () => {
     appendUsageEntry({
       requestId: "combo-row",
-      timestamp: 1_700_000_000_000,
+      timestamp: Date.now(),
       provider: "combo",
       model: "fast-fallback",
       requestedModel: "combo/fast-fallback",
