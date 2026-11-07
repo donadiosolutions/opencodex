@@ -425,7 +425,7 @@ jobs:
           cosign verify-blob --certificate-identity "$identity" \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --bundle evidence/release-manifest.sigstore.json evidence/release-manifest.json \
-            > "$output_dir/manifest-signature-verification.txt"
+            > "$output_dir/manifest-signature-verification.txt" 2>&1
           node trusted/.github/scripts/bcdn-image-manifest.mjs verify evidence/release-manifest.json \
             "$DIGEST" "$RELEASE_TAG" "$SOURCE_SHA" "$WORKFLOW_SHA" \
             "$UPSTREAM_TAG" "$UPSTREAM_SHA" "$SOURCE_BRANCH" "$GITHUB_RUN_ID"
