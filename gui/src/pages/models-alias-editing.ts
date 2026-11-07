@@ -24,7 +24,7 @@ export async function editProviderAlias(
   current: string,
   { apiBase, t, reloadAliases, publishFeedback }: AliasEditingDeps,
 ): Promise<void> {
-  const entered = await requestTextValue({ message: t("models.aliasPrompt"), initialValue: current });
+  const entered = await requestTextValue({ title: t("models.editProviderAlias"), message: t("models.aliasPrompt"), initialValue: current });
   // Dismissal is not an empty alias: a cancelled edit must write nothing.
   if (entered === null) return;
   const response = await fetch(`${apiBase}/api/providers/${encodeURIComponent(provider)}/alias`, {
@@ -42,7 +42,7 @@ export async function editModelAlias(
   current: string,
   { apiBase, t, reloadAliases, publishFeedback }: AliasEditingDeps,
 ): Promise<void> {
-  const entered = await requestTextValue({ message: t("models.modelAliasPrompt"), initialValue: current });
+  const entered = await requestTextValue({ title: t("models.editModelAlias"), message: t("models.modelAliasPrompt"), initialValue: current });
   if (entered === null) return;
   const body = entered.trim() ? { set: { [model]: entered.trim() } } : { remove: [model] };
   const response = await fetch(`${apiBase}/api/providers/${encodeURIComponent(provider)}/model-aliases`, {

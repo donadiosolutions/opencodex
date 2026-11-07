@@ -831,10 +831,9 @@ describe("injectCodexConfig integration (Design B)", () => {
     expect(readFileSync(rollout, "utf8")).toBe(bytes);
   });
 
-  test("a paginated home still receives the model catalog path the picker reads", () => {
-    // The user-visible regression this pins. A paginated rollout made the injector refuse
-    // the whole write, so `model_catalog_json` never reached config.toml: the Codex app and
-    // CLI both fell back to their native model list while `ocx sync` still said synchronized.
+  test("a paginated home still receives proxy routing without changing rollout history", () => {
+    // A paginated rollout must not veto routing injection. The picker now obtains the
+    // generated catalog from the proxy protocol, not a config.toml catalog path.
     const configPath = join(codexHome, "config.toml");
     writeFileSync(configPath, 'model = "gpt-5.5"\n');
     const catalogPath = join(codexHome, "opencodex-catalog.json");
@@ -854,11 +853,11 @@ describe("injectCodexConfig integration (Design B)", () => {
       historyPreflightFailureReason: "history_paginated_requires_native_writer",
     });
     const written = readFileSync(configPath, "utf8");
-    expect(written).toContain("model_catalog_json");
-    // What the picker reads is the decoded TOML value, not the raw file text. A Windows path
-    // is written as a basic string with escaped separators, so asserting on the raw text
-    // compared an unescaped path against escaped bytes and failed on Windows only.
-    expect(readRootTomlString(written, "model_catalog_json")).toBe(catalogPath);
+    expect(written).toContain('openai_base_url = "http://127.0.0.1:10100/v1"');
+    expect(readRootTomlString(written, "model_catalog_json")).toBeUndefined();
+    expect(JSON.parse(readFileSync(catalogPath, "utf8"))).toEqual({
+      models: [{ slug: "xai/grok-4.6", display_name: "Grok 4.6" }],
+    });
     expect(readFileSync(rollout, "utf8")).toBe(bytes);
   });
 

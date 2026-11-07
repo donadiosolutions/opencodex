@@ -4,6 +4,7 @@ import type { Capability } from "./capability-types";
 export const OBSERVE_SYSTEM_CAPABILITIES: readonly Capability[] = [
   {
     command: ["logs", "export"],
+    usage: "ocx logs export (--request <id>... | --from <ms> --to <ms>) [--out <path> [--force]] [--json]",
     summary: "Build a bounded, sanitized support bundle from canonical usage-ledger rows.",
     routes: [{ method: "GET", path: "/api/transaction-diagnostics/export" }],
     flags: [
