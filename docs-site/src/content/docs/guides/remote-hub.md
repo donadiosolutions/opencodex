@@ -833,3 +833,7 @@ ocx hub disable --revoke-clients --client-key <client-key-id> --json
 ```
 
 Repeat `--client-key` for several clients. With saved keys present, `--revoke-clients` without selected IDs refuses before changing settings. Unknown IDs also refuse. Only selected keys and their pending rotations are removed; output contains safe metadata rather than secrets. The command prints the restart step for the detected supervisor; it does not restart the proxy. Review `tailscale serve status` and other external frontends for mappings to old hub ports. Persisted settings and revocation apply to the running proxy after restart; Remote Link records and tunnels remain unchanged.
+
+## Entitlement version without a local Codex CLI
+
+Set [`codexEntitlementClientVersion`](/reference/configuration/server/#codexentitlementclientversion) to your supported Codex client version when the Hub has no local CLI. This keeps native model/tier authorization and account badges on the same authenticated roster version without creating CLI runtime metadata. Explicit model-discovery requests still use the requesting client’s version.

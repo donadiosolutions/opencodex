@@ -1,4 +1,5 @@
 import { MAIN_ACCOUNT_HARD_LOCK_MIN_PERCENT } from "../../codex/quota-types";
+import { codexEntitlementClientVersionSchema } from "./codex-entitlement-version";
 import { validRemainingQuotaAccountIds } from "../../codex/account-use-remaining";
 import * as z from "zod/v4";
 import { isAppendOnlyToolLoadingModels } from "../../claude/inbound-tool-loading";
@@ -110,6 +111,7 @@ export const configSchema = z.object({
   // A malformed hand edit must disable only remote-role behavior, not discard
   // providers or data-plane keys. Live writes are rejected explicitly below.
   runtimeRole: runtimeRoleSchema.optional().catch(undefined),
+  codexEntitlementClientVersion: codexEntitlementClientVersionSchema.optional().catch(undefined),
   // Malformed optional remote blocks disable only remote GUI behavior. Live
   // candidates are rejected explicitly by remoteGuiConfigError below.
   hub: hubConfigSchema.optional().catch(undefined),

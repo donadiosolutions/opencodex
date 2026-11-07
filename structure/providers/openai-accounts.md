@@ -387,7 +387,7 @@ The credits module beside `src/codex/quota-types.ts` retains validated WHAM cred
 
 `src/codex/auth-api/account-list.ts` exposes optional `credits` only when `showCodexCredits === true` and the current identity has an observation. Decimal balances remain strings; boolean flags and approximate local/cloud message ranges are allowlisted. Credits never enter persisted quota, routing, reset-credit recovery, or `/api/provider-quotas`, and are never logged. The [config surface](../config.md#config-surface) owns the display switch.
 
-Account DTOs expose display-only `entitlements` (`daybreak-blue`, `daybreak-red`, `ultrafast`) from fresh, confirmed, identity-matching cached rosters. The projection performs no discovery or refresh; absent, expired, unconfirmed or replaced-credential evidence supplies no pills.
+Account DTOs expose display-only `entitlements` (`daybreak-blue`, `daybreak-red`, `ultrafast`) from fresh, confirmed, identity-matching cached rosters. The projection performs no discovery or refresh; absent, expired, unconfirmed or replaced-credential evidence supplies no pills. Hub projections select the configured entitlement version rather than the latest observation across clients. Non-passive configured-Hub account-list reads first join bounded freshness work; passive relays remain observational.
 
 ## Quota history publication identity
 

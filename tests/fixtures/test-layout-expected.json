@@ -1,4 +1,6 @@
 {
+  "hub-entitlement-version.test.ts": "codex-integration",
+  "hub-account-entitlement-refresh.test.ts": "codex-integration",
   "codex-installation-acl.test.ts": "codex-integration",
   "codex-installation-id.test.ts": "codex-integration",
   "codex-installation-wire.test.ts": "codex-integration",

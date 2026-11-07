@@ -1,4 +1,5 @@
 import { readExistingSpendSalt, spendPoolAliasesError, validatePoolAliasOwners } from "../lib/spend-pool-alias-validation";
+import { codexEntitlementClientVersionError } from "./schema/codex-entitlement-version";
 import { isSubagentModelEntry, rawSubagentModelForce } from "./subagent-models";
 import { validRemainingQuotaAccountIds } from "../codex/account-use-remaining";
 import { protocolConfigSchema } from "./schema/config-schema";
@@ -766,6 +767,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? creditCodexAccountIdsError(value)
     ?? remainingQuotaAccountIdsError(value)
     ?? runtimeRoleError(value)
+    ?? codexEntitlementClientVersionError(value)
     ?? remoteGuiConfigError(value)
     ?? clientConnectionConfigError(value)
     ?? clientRolePairError(value)

@@ -1,11 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { saveCodexAccountCredential } from "../../src/codex/account-store";
 import { CodexModelAvailabilityError, resolveCodexAuthContext } from "../../src/codex/auth-context";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
-import { isDirectCallerEntitledToCodexUltrafast, resetCodexModelEntitlementCacheForTests } from "../../src/codex/model-entitlements";
+import { isDirectCallerEntitledToCodexUltrafast, resetCodexModelEntitlementCacheForTests, resolveCodexModelEntitlements } from "../../src/codex/model-entitlements";
 import type { CodexModelEntitlementSnapshot } from "../../src/codex/model-entitlements";
 import { clearThreadAccountMap } from "../../src/codex/routing";
 import type { OcxConfig } from "../../src/types";
@@ -15,6 +15,8 @@ import type { RouteResult } from "../../src/router";
 
 const MODEL = "gpt-6.1-sol";
 const TIER = { id: "ultrafast" as const, name: "Ultrafast", description: "Fast inference" };
+const HUB_CLIENT_VERSION = "0.160.0";
+const originalFetch = globalThis.fetch;
 let home: string;
 let previousHome: string | undefined;
 let previousCodexHome: string | undefined;
@@ -70,6 +72,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  globalThis.fetch = originalFetch;
   clearThreadAccountMap();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
@@ -79,6 +82,106 @@ afterEach(() => {
 });
 
 describe("Codex Ultrafast account selection", () => {
+  test("headless Hub Direct authorization asks its configured version and still requires the tier grant", async () => {
+    const cfg = { ...config(), runtimeRole: "hub" as const, codexEntitlementClientVersion: HUB_CLIENT_VERSION };
+    const model = "gpt-daybreak-blue-latest";
+    const headers = new Headers({ authorization: "Bearer caller-token", "chatgpt-account-id": "caller-account" });
+    const versions: (string | null)[] = [];
+    let granted = true;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      const version = url.searchParams.get("client_version");
+      versions.push(version);
+      return Response.json({ models: [{ slug: model, supported_in_api: true, visibility: "list",
+        ...(version === HUB_CLIENT_VERSION && granted ? { service_tiers: [TIER], additional_speed_tiers: ["ultrafast"] } : {}),
+      }] });
+    }) as typeof fetch;
+    expect(existsSync(join(home, "codex-runtime.json"))).toBe(false);
+    expect(await resolveCodexAuthContext(headers, cfg, "direct", {
+      modelId: model, serviceTier: "ultrafast",
+    })).toMatchObject({ kind: "main", accountId: null });
+    expect(versions).toEqual([HUB_CLIENT_VERSION]);
+    granted = false;
+    resetCodexModelEntitlementCacheForTests();
+    await expect(resolveCodexAuthContext(headers, cfg, "direct", {
+      modelId: model, serviceTier: "ultrafast",
+    })).rejects.toBeInstanceOf(CodexModelAvailabilityError);
+    expect(versions).toEqual([HUB_CLIENT_VERSION, HUB_CLIENT_VERSION]);
+    granted = true;
+    resetCodexModelEntitlementCacheForTests();
+    await expect(resolveCodexAuthContext(headers, { ...cfg, runtimeRole: "standalone" }, "direct", {
+      modelId: model, serviceTier: "ultrafast",
+    })).rejects.toBeInstanceOf(CodexModelAvailabilityError);
+    expect(versions.at(-1)).not.toBe(HUB_CLIENT_VERSION);
+  });
+
+  test("headless Hub Pool authorization uses the live policy version and detours to the entitled account", async () => {
+    const cfg = { ...config(), runtimeRole: "hub" as const, codexEntitlementClientVersion: "0.159.0" };
+    const policy = { ...cfg, runtimeRole: "hub" as const, codexEntitlementClientVersion: HUB_CLIENT_VERSION };
+    const versions: (string | null)[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(input instanceof Request ? input.url : input.toString());
+      const version = url.searchParams.get("client_version");
+      versions.push(version);
+      const entitled = version === HUB_CLIENT_VERSION && new Headers(init?.headers).get("authorization") === "Bearer token-pool-b";
+      return Response.json({ models: [{ slug: MODEL, supported_in_api: true, visibility: "list",
+        ...(entitled ? { service_tiers: [TIER], additional_speed_tiers: ["ultrafast"] } : {}),
+      }] });
+    }) as typeof fetch;
+    // Exhaust caller-selected version misses under the older routing snapshot. The live
+    // configured authority must retain its trusted allowance after this budget is spent.
+    const excludeAccountIds = new Set([MAIN_CODEX_ACCOUNT_ID]);
+    for (let index = 0; index < 8; index += 1) {
+      await resolveCodexModelEntitlements(cfg, { clientVersion: `0.${400 + index}.0`, excludeAccountIds });
+    }
+    expect(versions).toHaveLength(8);
+    const refused = await resolveCodexModelEntitlements(cfg, { clientVersion: "0.499.0", excludeAccountIds });
+    expect(refused.confirmedAccountIds.size).toBe(0);
+    expect(versions).toHaveLength(8);
+    const context = await resolveCodexAuthContext(new Headers({ authorization: "Bearer caller-token" }), cfg, "pool", {
+      codexAuthPolicy: policy, modelId: MODEL, serviceTier: "ultrafast", requestScopedMainCredential: true,
+      isDirectCallerEntitledToCodexUltrafast: async () => false,
+      primeCodexPoolQuotas: async () => {},
+    });
+    expect(context).toMatchObject({ kind: "pool", accountId: "pool-b" });
+    expect(versions.slice(8)).toEqual([HUB_CLIENT_VERSION, HUB_CLIENT_VERSION]);
+    expect(cfg.activeCodexAccountPinned).toBe("pool-a");
+    expect(cfg.codexEntitlementClientVersion).toBe("0.159.0");
+    expect(existsSync(join(home, "codex-runtime.json"))).toBe(false);
+    await expect(resolveCodexAuthContext(new Headers({ authorization: "Bearer caller-token" }), cfg, "pool", {
+      codexAuthPolicy: policy, accountId: "pool-a", modelId: MODEL, serviceTier: "ultrafast",
+      requestScopedMainCredential: true, isDirectCallerEntitledToCodexUltrafast: async () => false,
+      primeCodexPoolQuotas: async () => {},
+    })).rejects.toBeInstanceOf(CodexModelAvailabilityError);
+  });
+
+  test("stored Direct discovery uses the configured Hub version after its main-profile claim", async () => {
+    const cfg = { ...config(), runtimeRole: "hub" as const, codexEntitlementClientVersion: "0.159.0" };
+    const policy = { ...cfg, codexEntitlementClientVersion: HUB_CLIENT_VERSION };
+    let claimed = false;
+    let discoveries = 0;
+    expect(await resolveCodexAuthContext(new Headers({ authorization: "Bearer admission-token" }), cfg, "direct", {
+      codexAuthPolicy: policy, modelId: MODEL, serviceTier: "ultrafast", substituteMainCredentialForDirect: true,
+      beginCodexAccountSelection: () => ({
+        mainProfileDraining: false, claimMainProfile: () => { claimed = true; return true; }, release: () => {},
+      }),
+      getValidMainAccountToken: async () => ({ accessToken: "stored-main-token", chatgptAccountId: "stored-main-account" }),
+      resolveCodexModelEntitlements: async (_config, options) => {
+        expect(claimed).toBe(true);
+        expect(_config.codexEntitlementClientVersion).toBe(HUB_CLIENT_VERSION);
+        expect(_config.codexAccounts).toBe(cfg.codexAccounts);
+        expect(options?.clientVersion).toBe(HUB_CLIENT_VERSION);
+        discoveries += 1;
+        return { ...snapshot({ [MAIN_CODEX_ACCOUNT_ID]: [MODEL] }),
+          confirmedAccountIds: new Set([MAIN_CODEX_ACCOUNT_ID]),
+          modelsByAccount: new Map([[MAIN_CODEX_ACCOUNT_ID, new Set([MODEL])]]),
+        };
+      },
+    })).toMatchObject({ kind: "main", accountId: null });
+    expect(discoveries).toBe(1);
+    expect(cfg.codexEntitlementClientVersion).toBe("0.159.0");
+  });
+
   test("detours a pinned model-capable account to the account granted Ultrafast", async () => {
     const cfg = config();
     const entitlements = snapshot({ "pool-b": [MODEL] });

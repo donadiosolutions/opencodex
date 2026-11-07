@@ -1240,3 +1240,16 @@ Disabling the header clock preserves client cancellation and any enclosing overa
 Optional `opencodeClientExport` controls the generated OpenCode provider's `headerTimeoutMs`, `chunkTimeoutMs`, and `timeoutMs` (positive milliseconds or `false` to disable). Unset values preserve OpenCode defaults; malformed fields are omitted. These provider-wide settings are emitted into V1 options and V2 settings. See [slow local models](/guides/opencode/#slow-local-models-prefill-timeouts).
 
 Optional, config-file-only `omoClientExport.api` selects the dialect of the managed Pi-based omo provider block: `openai-completions` (default) or `openai-responses`. Other values are ignored. Only omo reads it. After adding, changing or removing this key, restart the proxy (`ocx service restart` for a service install, or `ocx stop`, then `ocx start`), then refresh **Connect → omo** in the dashboard. Refresh uses the running proxy's config; it does not reload the file. See [integrations](/guides/integrations/).
+
+## `codexEntitlementClientVersion`
+
+On a headless `runtimeRole: "hub"`, set this optional string to the Codex client version your deployment supports, for example `"0.167.0"`. It selects the version used to query authenticated account rosters for inference authorization and dashboard entitlement badges. Update it when the supported client version changes.
+
+```json
+{
+  "runtimeRole": "hub",
+  "codexEntitlementClientVersion": "0.167.0"
+}
+```
+
+This setting does not install Codex or claim a local CLI exists. Explicit client-version discovery requests retain their own version. The account must still confirm model and tier access in its authenticated roster. Without the setting, existing runtime-version and bundled-floor behavior applies. It is accepted only for the Hub role; malformed disk values are ignored, and invalid live writes are rejected. Hub account reads refresh missing or expired evidence with a bounded wait; passive relays do not start refresh work.

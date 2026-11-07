@@ -33,7 +33,7 @@ import { fetchMainAccountInfoAttempt, EMPTY_MAIN_ACCOUNT_INFO, mainResetCreditsF
 import { fetchPoolAccountQuota, PoolQuotaProbeBusyError, POOL_QUOTA_REFRESH_CONCURRENCY } from "./pool-quota-probe";
 import type { PoolQuotaResult } from "./pool-quota-probe";
 import { getRuntimeConfig, configuredPoolAccount, mapWithConcurrency } from "./runtime-config";
-import { cachedCodexAccountEntitlements, type CodexAccountDisplayEntitlement } from "../model-entitlements";
+import { cachedCodexAccountEntitlements, ensureCodexEntitlementFreshness, resolveCodexEntitlementClientVersion, type CodexAccountDisplayEntitlement } from "../model-entitlements";
 import { isPassiveRead } from "../../lib/passive-read";
 import { configuredAdminToken } from "../../lib/admin-secrets";
 import { nativeUserIdClaims } from "../reserve-availability";
@@ -150,7 +150,8 @@ export function poolAccountDto(
     ...(plan !== undefined ? { plan } : {}),
     logLabel: codexAccountLogLabel(account),
     isMain: false,
-    entitlements: hasCredential ? cachedCodexAccountEntitlements(account.id) : [],
+    entitlements: hasCredential ? cachedCodexAccountEntitlements(account.id, Date.now(),
+      config.runtimeRole === "hub" ? resolveCodexEntitlementClientVersion(null, undefined, { config }) : undefined) : [],
     paused,
     ...(config.codexAccountPauseState?.[account.id]?.details ? { pauseDetails: config.codexAccountPauseState[account.id]!.details } : {}),
     priority,
@@ -298,6 +299,11 @@ export async function listCodexAuthAccountsSnapshot(
   options: CodexAuthAccountsListOptions = {},
 ): Promise<CodexAuthAccountsSnapshot> {
   const runtimeConfig = getRuntimeConfig(config);
+  // Headless Hubs refresh their configured version, without running a local Codex sync.
+  // Passive relays retain their no-I/O contract; concurrent dashboard reads join one flight.
+  if (!isPassiveRead() && runtimeConfig.runtimeRole === "hub" && runtimeConfig.codexEntitlementClientVersion) {
+    await ensureCodexEntitlementFreshness(runtimeConfig, { waitMs: 3_000 });
+  }
   const poolAccounts = (runtimeConfig.codexAccounts ?? []).filter(isSelectableCodexPoolAccount);
   pruneCodexCredits([MAIN_CODEX_ACCOUNT_ID, ...poolAccounts.map(account => account.id)]);
   // One redaction decision for the whole snapshot, read once from the operator's config (#3859).
@@ -441,7 +447,8 @@ export async function listCodexAuthAccountsSnapshot(
       logLabel: "main",
       isMain: true,
       entitlements: mainRosterReadable && mainSnapshotLive && hasMainCredential
-        ? cachedCodexAccountEntitlements(MAIN_CODEX_ACCOUNT_ID) : [],
+        ? cachedCodexAccountEntitlements(MAIN_CODEX_ACCOUNT_ID, Date.now(), runtimeConfig.runtimeRole === "hub"
+          ? resolveCodexEntitlementClientVersion(null, undefined, { config: runtimeConfig }) : undefined) : [],
       paused: isCodexAccountPaused(runtimeConfig, MAIN_CODEX_ACCOUNT_ID),
       ...(runtimeConfig.codexAccountPauseState?.[MAIN_CODEX_ACCOUNT_ID]?.details ? { pauseDetails: runtimeConfig.codexAccountPauseState[MAIN_CODEX_ACCOUNT_ID]!.details } : {}),
       mainAccountHardLock: { ...getMainAccountHardLockStatus(runtimeConfig),
