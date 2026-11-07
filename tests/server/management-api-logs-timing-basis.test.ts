@@ -118,8 +118,9 @@ describe("mixed persisted Logs history", () => {
   });
 
   test("GET /api/logs after hydration labels both bases without rewriting JSONL", async () => {
-    addRequestLog({ ...scalar, requestId: "legacy-row" });
-    addRequestLog({ ...generation, requestId: "generation-row" });
+    const timestamp = Date.now();
+    addRequestLog({ ...scalar, requestId: "legacy-row", timestamp });
+    addRequestLog({ ...generation, requestId: "generation-row", timestamp });
     const path = usageLogPath();
     const before = readFileSync(path, "utf8");
     clearRequestLogsForTests();
