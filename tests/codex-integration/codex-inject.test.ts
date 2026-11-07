@@ -2,7 +2,6 @@
 import { describe, expect, test } from "bun:test";
 import {
   applyEol,
-  applyCodexCatalogOverride,
   buildOpenaiBaseUrlLine,
   buildRealtimeWsBaseUrlLine,
   buildProfileFile,
@@ -17,6 +16,7 @@ import {
 } from "../../src/codex/inject";
 import { DEFAULT_CATALOG_PATH } from "../../src/codex/paths";
 import {
+  applyCodexCatalogOverride,
   DEFAULT_CODEX_PROVIDER_DISPLAY_NAME,
   buildProfileFileForTarget,
   buildProviderTableBlockForTarget,
