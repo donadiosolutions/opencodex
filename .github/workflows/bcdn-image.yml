@@ -145,7 +145,7 @@ jobs:
                 --build-arg SOURCE_REPOSITORY="https://github.com/$GITHUB_REPOSITORY" \
                 --build-arg RELEASE_TAG="$RELEASE_TAG" \
                 --build-context prepared="$(pwd)/prepared" \
-                --attest type=provenance,mode=max \
+                --attest type=provenance,mode=max,version=v1 \
                 --attest type=sbom,generator=docker/buildkit-syft-scanner:stable-1@sha256:873a7458c3c8ac8e32c7b796c10e1600b07b963d2aa000a72a2d97aaaa2d6315 \
                 --tag "$image:$staging_tag" --metadata-file "$RUNNER_TEMP/bcdn-build-metadata.json" --push "$context" \
                 < trusted/Dockerfile

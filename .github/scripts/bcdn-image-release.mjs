@@ -8,6 +8,7 @@ const response = await fetch(`https://api.github.com/repos/${repository}/release
     Accept: "application/vnd.github+json",
     "X-GitHub-Api-Version": "2022-11-28",
   },
+  signal: AbortSignal.timeout(30000),
 });
 if (response.status === 404) {
   console.log("absent");

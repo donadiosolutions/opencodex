@@ -12,7 +12,7 @@ const tokenUrl = new URL("https://ghcr.io/token");
 tokenUrl.searchParams.set("service", "ghcr.io");
 tokenUrl.searchParams.set("scope", `repository:${path}:pull`);
 const auth = `Basic ${Buffer.from(`${actor}:${credential}`).toString("base64")}`;
-const tokenResponse = await fetch(tokenUrl, { headers: { Authorization: auth } });
+const tokenResponse = await fetch(tokenUrl, { headers: { Authorization: auth }, signal: AbortSignal.timeout(30000) });
 if (!tokenResponse.ok) throw new Error(`GHCR token request: HTTP ${tokenResponse.status}`);
 const token = (await tokenResponse.json()).token;
 if (typeof token !== "string" || !token) throw new Error("Missing GHCR bearer token");
@@ -22,6 +22,7 @@ const digestPattern = /^sha256:[0-9a-f]{64}$/;
 async function registryGet(kind, ref, accept) {
   const response = await fetch(`${base}/${kind}/${ref}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: accept },
+    signal: AbortSignal.timeout(60000),
   });
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`GHCR ${kind} request: HTTP ${response.status}`);

@@ -1,4 +1,4 @@
-# syntax=docker/dockerfile:1
+# syntax=docker/dockerfile:1.22.0@sha256:4a43a54dd1fedceb30ba47e76cfcf2b47304f4161c0caeac2db1c61804ea3c91
 
 # Keep the runtime aligned with package.json and pin the multi-platform image index.
 # Runtime 1.4.4 keeps 1.4.2's #6684 Windows Bun.fetch streaming fix and ships NSS
@@ -9,8 +9,9 @@
 # historical 1.4.2 preload crashes (#4821; #6713 run 37631558263) and 1.4.0
 # spawnSync exit loss (#4956, oven-sh/bun#44581) remain regression risks.
 ARG BUN_IMAGE=oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d
+ARG MANIFEST_STAGE=manifest-from-git
 
-FROM ${BUN_IMAGE} AS manifest
+FROM ${BUN_IMAGE} AS manifest-from-git
 WORKDIR /home/bun/app
 
 # The pinned Bun image does not include Git. Keep it confined to this build-only stage.
@@ -56,6 +57,19 @@ RUN --mount=type=bind,target=/build-context set -eu; \
     exit 1; \
   fi
 
+# Signed releases prepare the compatibility manifest from the exact selected
+# checkout in a read-only job. The trusted named context contains the manifest
+# and verifier only; this stage never installs Git or executes selected code.
+FROM scratch AS prepared
+FROM ${BUN_IMAGE} AS manifest-prepared
+WORKDIR /home/bun/app
+COPY --from=prepared /verify-compatibility.ts /tmp/verify-compatibility.ts
+COPY --from=prepared /compatibility-version.json /manifest/src/generated/compatibility-version.json
+RUN --mount=type=bind,target=/build-context \
+  bun /tmp/verify-compatibility.ts /build-context /manifest/src/generated/compatibility-version.json
+
+FROM ${MANIFEST_STAGE} AS manifest
+
 FROM ${BUN_IMAGE} AS build
 WORKDIR /home/bun/app
 
@@ -74,6 +88,12 @@ RUN cd gui && bun run build
 
 FROM ${BUN_IMAGE} AS runtime
 WORKDIR /home/bun/app
+ARG SOURCE_SHA=""
+ARG SOURCE_REPOSITORY=""
+ARG RELEASE_TAG=""
+LABEL org.opencontainers.image.revision="${SOURCE_SHA}" \
+      org.opencontainers.image.source="${SOURCE_REPOSITORY}" \
+      org.opencontainers.image.version="${RELEASE_TAG}"
 
 # Docker supervises this foreground process; retain routed state on stop/recreate.
 # This uses the existing service lifecycle mode and does not install a service manager.
