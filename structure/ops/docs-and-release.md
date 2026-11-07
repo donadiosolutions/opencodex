@@ -138,7 +138,7 @@ bun run build
 ## Container deployment recipe
 
 The repository ships a root multi-stage `Dockerfile`, `compose.yaml`, narrow `.dockerignore`, and
-container bootstrap helper, but still publishes no registry image. The source build pins the Bun
+container bootstrap helper. The source build pins the Bun
 base by multi-platform digest, runs non-root with a read-only root filesystem and dropped
 capabilities, publishes the data port on host loopback by default (remote binding is an explicit
 `OPENCODEX_BIND_ADDRESS` opt-in), persists `OPENCODEX_HOME`, and streams the initial data token through stdin into the
@@ -154,9 +154,11 @@ the context also admits the canonical generator, while the runtime includes only
 Operators must still prove liveness, readiness, authenticated
 catalog access, and a real routed response before promotion.
 
-An official image would create a larger release surface requiring maintained base-image digest
-updates, vulnerability scanning, SBOM, signing, registry provenance, rollback, and support policy.
-Those controls still have no owner, so there is no image-publish workflow or official registry tag.
+The fork's manual numbered release path publishes a signed GHCR image and an npm/pnpm
+GitHub Release tarball named `opencodex-<release-tag>.tgz`. The signed manifest binds
+both outputs to the source and workflow SHAs, recording the package identity and SHA-256/SHA-512.
+`.github/scripts/bcdn-image-VERIFY.md` documents signature and provenance verification before installation.
+This fork path does not publish to npm and has its own image and support policy.
 
 > Decision record: [ADR-0081](../decisions/ADR-0081-container-deployment-recipe.md)
 
