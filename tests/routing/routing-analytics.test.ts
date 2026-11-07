@@ -13,6 +13,7 @@ import {
 import { closeRequestHistoryIndex } from "../../src/routing/history/indexer";
 import { computeRoutingAnalytics } from "../../src/routing/analytics";
 import { computeEntryCost } from "../../src/usage/summary";
+import { setUsageDetailNowForTests, USAGE_DETAIL_RETENTION_MS } from "../../src/usage/retention-contract";
 import type { OcxConfig } from "../../src/types";
 import { removeTreeWithRetry } from "../helpers/remove-tree";
 
@@ -38,9 +39,11 @@ beforeEach(() => {
   process.env.OPENCODEX_HOME = testDir;
   resetUsageReadCacheForTests();
   closeRequestHistoryIndex();
+  setUsageDetailNowForTests(USAGE_DETAIL_RETENTION_MS);
 });
 
 afterEach(() => {
+  setUsageDetailNowForTests(undefined);
   closeRequestHistoryIndex();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;
