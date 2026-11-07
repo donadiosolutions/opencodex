@@ -171,12 +171,13 @@ describe("CL-09 bounded passive production projection", () => {
     try {
       const subjectId = "6".repeat(64);
       const otherSubjectId = "7".repeat(64);
+      const startTimestamp = Date.now() - PASSIVE_PRODUCTION_MAX_SCAN_ROWS;
       const entries = Array.from({ length: PASSIVE_PRODUCTION_MAX_SCAN_ROWS + 1 }, (_, index) => {
         const entry = usageEntryWithAttempt({
           labRouteSubjectId: index === PASSIVE_PRODUCTION_MAX_SCAN_ROWS ? subjectId : otherSubjectId,
         });
         entry.requestId = `ocx-cl09-config-${index}`;
-        entry.timestamp = index;
+        entry.timestamp = startTimestamp + index;
         return entry;
       });
       writeFileSync(join(configDir, "usage.jsonl"), `${entries.map(entry => JSON.stringify(entry)).join("\n")}\n`);
