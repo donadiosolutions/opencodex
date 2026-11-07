@@ -305,7 +305,7 @@ report the request execution budget's final state, and `moveReasons` names every
 that discarded a warmed prompt-cache prefix. `/api/usage` totals these as `sends`,
 `settledSends`, `unresolvedSends` and `spendRequests`; per-attempt `sendCount` remains the
 accounting source, and `attemptCount` is the smaller number because retry layers re-send inside
-one attempt.
+one attempt. Diagnostic send ownership follows the attempt ID when an account rotation reuses the active attempt object, so the prior account's sends cannot inflate the next attempt's count.
 
 Cache detail is qualified by provenance rather than read as a measurement. `cacheProvenance` is
 `observed`, `synthesized` or `unknown`: strict-client normalization emits zero-default
