@@ -1,10 +1,51 @@
 // Trusted orchestration: never load code from the selected branch.
 const { execFileSync } = require('node:child_process');
-const { mkdtempSync, readFileSync, readdirSync } = require('node:fs');
+const { mkdtempSync, readFileSync, readdirSync, writeFileSync, unlinkSync, rmdirSync, existsSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
-const PREFIX = 'opencodex-fork-reservation-v1\n';
+const PREFIX = 'opencodex-fork-reservation-v2\n';
+const LEGACY_PREFIX = 'opencodex-fork-reservation-v1\n';
 const IMAGE = 'ghcr.io/donadiosolutions/opencodex';
+const RESERVATION_IDENTITY = 'https://github.com/donadiosolutions/opencodex/.github/workflows/bcdn-release.yml@refs/heads/custom';
+const RESERVATION_ISSUER = 'https://token.actions.githubusercontent.com';
+const RESERVATION_KEYS = ['schema', 'repository', 'run_id', 'source_branch', 'source_sha',
+  'upstream_tag', 'upstream_sha', 'workflow_sha', 'release_tag'];
+
+function canonicalReservation(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value) ||
+      Object.keys(value).join() !== RESERVATION_KEYS.join()) {
+    throw new Error('Malformed release reservation fields');
+  }
+  return `${JSON.stringify(value)}\n`;
+}
+
+function withReservationFiles(payload, bundle, useFiles) {
+  const directory = mkdtempSync(join(tmpdir(), 'fork-reservation-'));
+  const payloadPath = join(directory, 'payload.json');
+  const bundlePath = join(directory, 'bundle.sigstore.json');
+  try {
+    writeFileSync(payloadPath, payload, { mode: 0o600 });
+    if (bundle !== null) writeFileSync(bundlePath, bundle, { mode: 0o600 });
+    return useFiles(payloadPath, bundlePath);
+  } finally {
+    if (existsSync(payloadPath)) unlinkSync(payloadPath);
+    if (existsSync(bundlePath)) unlinkSync(bundlePath);
+    rmdirSync(directory);
+  }
+}
+function cosign(args) {
+  const binary = process.env.BCDN_COSIGN;
+  if (!binary) throw new Error('Pinned Cosign binary is required for release reservations');
+  return execFileSync(binary, args, { encoding: 'utf8', timeout: 180000, maxBuffer: 1024 * 1024 });
+}
+function signedReservation(value) {
+  const payload = canonicalReservation(value);
+  const bundle = withReservationFiles(payload, null, (payloadPath, bundlePath) => {
+    cosign(['sign-blob', '--yes', '--bundle', bundlePath, payloadPath]);
+    return readFileSync(bundlePath, 'utf8');
+  });
+  return PREFIX + JSON.stringify({ payload, bundle });
+}
 
 function nextTag(upstream, names) {
   const prefix = `${upstream}-bcdn`;
@@ -17,9 +58,20 @@ function nextTag(upstream, names) {
   return `${prefix}${String(maximum + 1n).padStart(2, '0')}`;
 }
 function reservation(message) {
+  if (message?.startsWith(LEGACY_PREFIX)) throw new Error('Unsigned release reservation is not trusted');
   if (!message?.startsWith(PREFIX)) return null;
-  const value = JSON.parse(message.slice(PREFIX.length));
-  if (value.schema !== 1 || !/^\d+$/.test(value.run_id) ||
+  const raw = message.slice(PREFIX.length).trimEnd();
+  const envelope = JSON.parse(raw);
+  if (!envelope || Object.keys(envelope).join() !== 'payload,bundle' ||
+      typeof envelope.payload !== 'string' || typeof envelope.bundle !== 'string' ||
+      JSON.stringify(envelope) !== raw || !envelope.payload.endsWith('\n') ||
+      canonicalReservation(JSON.parse(envelope.payload)) !== envelope.payload) {
+    throw new Error('Malformed signed release reservation');
+  }
+  JSON.parse(envelope.bundle);
+  const value = JSON.parse(envelope.payload);
+  if (value.schema !== 1 || value.repository !== 'donadiosolutions/opencodex' ||
+      !/^\d+$/.test(value.run_id) ||
       !/^[a-f0-9]{40}$/.test(value.source_sha) || !/^[a-f0-9]{40}$/.test(value.workflow_sha) ||
       !/^[a-f0-9]{40}$/.test(value.upstream_sha) ||
       !/^v\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?$/.test(value.upstream_tag) ||
@@ -27,6 +79,15 @@ function reservation(message) {
       !/^\d+$/.test(value.release_tag.slice(`${value.upstream_tag}-bcdn`.length))) {
     throw new Error('Malformed release reservation');
   }
+  withReservationFiles(envelope.payload, envelope.bundle, (payloadPath, bundlePath) => {
+    cosign(['verify-blob', '--bundle', bundlePath,
+      '--certificate-identity', RESERVATION_IDENTITY,
+      '--certificate-oidc-issuer', RESERVATION_ISSUER,
+      '--certificate-github-workflow-repository', value.repository,
+      '--certificate-github-workflow-ref', 'refs/heads/custom',
+      '--certificate-github-workflow-sha', value.workflow_sha,
+      '--certificate-github-workflow-trigger', 'workflow_dispatch', payloadPath]);
+  });
   return value;
 }
 async function allState(github, repo) {
@@ -75,7 +136,8 @@ async function reserve({ github, context, core }) {
   const repo = context.repo;
   if (`${repo.owner}/${repo.repo}` !== 'donadiosolutions/opencodex') throw new Error('Fork-only workflow');
   const { data: repository } = await github.rest.repos.get(repo);
-  if (context.ref !== `refs/heads/${repository.default_branch}` || context.sha !== process.env.GITHUB_WORKFLOW_SHA) {
+  if (repository.default_branch !== 'custom' || context.ref !== 'refs/heads/custom' ||
+      context.sha !== process.env.GITHUB_WORKFLOW_SHA) {
     throw new Error('Dispatch must use the default branch workflow revision');
   }
   // Reruns retain the original dispatch actor's privileges. Check both actors
@@ -113,7 +175,7 @@ async function reserve({ github, context, core }) {
       value = { schema: 1, repository: `${repo.owner}/${repo.repo}`, run_id: runId,
         source_branch, source_sha, ...identity, workflow_sha: context.sha, release_tag };
       const { data: tag } = await github.rest.git.createTag({ ...repo, tag: release_tag,
-        message: PREFIX + JSON.stringify(value), object: source_sha, type: 'commit' });
+        message: signedReservation(value), object: source_sha, type: 'commit' });
       try {
         await github.rest.git.createRef({ ...repo, ref: `refs/tags/${release_tag}`, sha: tag.sha });
         break;

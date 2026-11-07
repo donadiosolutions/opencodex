@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write
+      id-token: write
     outputs:
       release_tag: ${{ steps.reserve.outputs.release_tag }}
       release_id: ${{ steps.reserve.outputs.release_id }}
@@ -34,10 +35,14 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Install pinned Cosign for reservation signing
+        shell: bash
+        run: bash .github/scripts/bcdn-image-tools.sh cosign
       - id: reserve
         uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
         env:
           SOURCE_BRANCH: ${{ inputs.source_branch }}
+          BCDN_COSIGN: ${{ runner.temp }}/bcdn-image-tools/cosign
         with:
           script: await require('./.github/scripts/bcdn-release.cjs').reserve({github, context, core})
 
@@ -72,6 +77,9 @@ jobs:
         with:
           name: bcdn-evidence
           path: evidence
+      - name: Install pinned Cosign for reservation verification
+        shell: bash
+        run: bash .github/scripts/bcdn-image-tools.sh cosign
       - uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
         env:
           RELEASE_TAG: ${{ needs.reserve.outputs.release_tag }}
@@ -79,6 +87,7 @@ jobs:
           SOURCE_SHA: ${{ needs.reserve.outputs.source_sha }}
           IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
           EVIDENCE_DIRECTORY: evidence
+          BCDN_COSIGN: ${{ runner.temp }}/bcdn-image-tools/cosign
         with:
           script: await require('./.github/scripts/bcdn-release.cjs').finalize({github, context, core})
 
@@ -95,10 +104,14 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           persist-credentials: false
+      - name: Install pinned Cosign for reservation verification
+        shell: bash
+        run: bash .github/scripts/bcdn-image-tools.sh cosign
       - uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
         env:
           SOURCE_BRANCH: ${{ needs.reserve.outputs.source_branch }}
           IMAGE_DIGEST: ${{ needs.image.outputs.digest }}
           GH_TOKEN: ${{ github.token }}
+          BCDN_COSIGN: ${{ runner.temp }}/bcdn-image-tools/cosign
         with:
           script: await require('./.github/scripts/bcdn-release.cjs').promote({github, context, core})
