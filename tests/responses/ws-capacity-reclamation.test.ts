@@ -152,7 +152,7 @@ async function connect(retriesRemaining = MAX_TRACKED_CODEX_WEBSOCKETS): Promise
   client.socket.addEventListener("error", event => { client.error = event; });
   await until(() => client.socket.readyState === WebSocket.OPEN || Boolean(client.error || client.closed), "socket handshake");
   if (client.socket.readyState !== WebSocket.OPEN) {
-    expect(refusedHandshakes.get(attempt)).toEqual({ status: 503, retryAfter: "1" });
+    expect(refusedHandshakes.get(attempt)).toEqual({ status: 426, retryAfter: null });
     await until(() => codexWebSocketAdmissionMetrics().active < MAX_TRACKED_CODEX_WEBSOCKETS,
       "reclaimed socket releases admission before retry");
     expect(retriesRemaining).toBeGreaterThan(0);
@@ -193,7 +193,7 @@ test.each([0, 20])("the 129th handshake reclaims the least recently used idle so
   const replacement = await connect();
   await until(() => Boolean(opened[1]!.closed), "least recently used idle socket closed");
   expect(opened[1]!.closed?.code).toBe(1001);
-  if (delay) expect([...refusedHandshakes.values()].some(response => response.status === 503)).toBe(true);
+  if (delay) expect([...refusedHandshakes.values()].some(response => response.status === 426)).toBe(true);
   expect(opened[0]!.socket.readyState).toBe(WebSocket.OPEN);
   expectBounded();
   await exchange(replacement, { input: "fresh request after capacity recovery" });
@@ -228,7 +228,7 @@ test("capacity pressure preserves a streaming response until it completes", asyn
   expectBounded();
 }, 15_000);
 
-test("client tool execution stays protected, and all-busy saturation keeps the 503 refusal", async () => {
+test("client tool execution stays protected, and all-busy saturation requests HTTP fallback", async () => {
   const opened = await fill();
   for (const client of opened) {
     await exchange(client, { input: "request-fixture-tool", tools: [{ type: "function", name: "fixture_tool",
@@ -239,9 +239,11 @@ test("client tool execution stays protected, and all-busy saturation keeps the 5
     connection: "upgrade", upgrade: "websocket", "sec-websocket-version": "13",
     "sec-websocket-key": Buffer.from("capacity-fixture").toString("base64"),
   } });
-  expect(response.status).toBe(503);
-  expect(response.headers.get("retry-after")).toBe("1");
-  expect(await response.text()).toContain("Codex WebSockets capacity reached");
+  expect(response.status).toBe(426);
+  expect(response.headers.get("retry-after")).toBeNull();
+  expect(await response.json()).toMatchObject({ error: {
+    code: "upgrade_required", message: "Responses WebSocket capacity reached; use HTTP",
+  } });
   expect(codexWebSocketAdmissionMetrics().rejected).toBe(rejectedBefore + 1);
   expect(opened.every(client => client.socket.readyState === WebSocket.OPEN)).toBe(true);
   await exchange(opened[0]!, { input: [{ type: "function_call_output", call_id: "call_capacity", output: "fixture tool result" }] });
