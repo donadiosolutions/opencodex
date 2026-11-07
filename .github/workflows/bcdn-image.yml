@@ -26,7 +26,48 @@ on:
 permissions: {}
 
 jobs:
+  authorize:
+    runs-on: blacksmith-4vcpu-ubuntu-2604
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Authorize the release workflow caller
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        env:
+          CALLER_REPOSITORY: ${{ github.repository }}
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
+          CALLER_REF: ${{ github.ref }}
+          CALLER_EVENT: ${{ github.event_name }}
+          CALLER_SHA: ${{ github.sha }}
+          CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const expectedRepo = 'donadiosolutions/opencodex';
+            const expectedRef = 'refs/heads/custom';
+            const expectedWorkflow = `${expectedRepo}/.github/workflows/bcdn-release.yml@${expectedRef}`;
+            if (process.env.CALLER_REPOSITORY !== expectedRepo ||
+                process.env.CALLER_WORKFLOW_REF !== expectedWorkflow ||
+                process.env.CALLER_REF !== expectedRef ||
+                process.env.CALLER_EVENT !== 'workflow_dispatch' ||
+                !/^[0-9a-f]{40}$/.test(process.env.CALLER_SHA ?? '') ||
+                process.env.CALLER_SHA !== process.env.CALLER_WORKFLOW_SHA) {
+              throw new Error('Unauthorized image workflow caller');
+            }
+            const repo = { owner: 'donadiosolutions', repo: 'opencodex' };
+            const { data: repository } = await github.rest.repos.get(repo);
+            if (repository.default_branch !== 'custom') throw new Error('Unexpected release default branch');
+            for (const username of new Set([context.actor, process.env.TRIGGERING_ACTOR])) {
+              if (!username) throw new Error('Missing release actor');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
+              if (![data.permission, data.role_name].some(role => ['maintain', 'admin'].includes(role))) {
+                throw new Error('Release actor requires maintain or admin access');
+              }
+            }
+
   prepare:
+    needs: authorize
     runs-on: blacksmith-4vcpu-ubuntu-2604
     timeout-minutes: 15
     permissions:
@@ -34,6 +75,20 @@ jobs:
     outputs:
       manifest_sha256: ${{ steps.manifest.outputs.sha256 }}
     steps:
+      - name: Recheck actors before source checkout
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const repo = { owner: 'donadiosolutions', repo: 'opencodex' };
+            for (const username of new Set([context.actor, process.env.TRIGGERING_ACTOR])) {
+              if (!username) throw new Error('Missing release actor');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
+              if (![data.permission, data.role_name].some(role => ['maintain', 'admin'].includes(role))) {
+                throw new Error('Release actor requires maintain or admin access');
+              }
+            }
       - name: Check out trusted workflow code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -81,6 +136,20 @@ jobs:
       digest: ${{ steps.image.outputs.digest }}
       existing: ${{ steps.image.outputs.existing }}
     steps:
+      - name: Recheck actors before registry publication
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const repo = { owner: 'donadiosolutions', repo: 'opencodex' };
+            for (const username of new Set([context.actor, process.env.TRIGGERING_ACTOR])) {
+              if (!username) throw new Error('Missing release actor');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
+              if (![data.permission, data.role_name].some(role => ['maintain', 'admin'].includes(role))) {
+                throw new Error('Release actor requires maintain or admin access');
+              }
+            }
       - name: Check out trusted workflow code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -219,6 +288,20 @@ jobs:
     outputs:
       digest: ${{ steps.promote.outputs.digest }}
     steps:
+      - name: Recheck actors before signing
+        uses: actions/github-script@d746ffe35508b1917358783b479e04febd2b8f71 # v9.0.0
+        env:
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        with:
+          script: |
+            const repo = { owner: 'donadiosolutions', repo: 'opencodex' };
+            for (const username of new Set([context.actor, process.env.TRIGGERING_ACTOR])) {
+              if (!username) throw new Error('Missing release actor');
+              const { data } = await github.rest.repos.getCollaboratorPermissionLevel({ ...repo, username });
+              if (![data.permission, data.role_name].some(role => ['maintain', 'admin'].includes(role))) {
+                throw new Error('Release actor requires maintain or admin access');
+              }
+            }
       - name: Check out trusted workflow code
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
