@@ -1,5 +1,6 @@
 // Trusted orchestration: never load code from the selected branch.
 const { execFileSync } = require('node:child_process');
+const { createHash } = require('node:crypto');
 const { mkdtempSync, readFileSync, readdirSync, writeFileSync, unlinkSync, rmdirSync, existsSync } = require('node:fs');
 const { tmpdir } = require('node:os');
 const { join } = require('node:path');
@@ -125,11 +126,13 @@ function upstreamIdentity(repo, sha) {
 function notes(value, digest) {
   const run = `https://github.com/${value.repository}/actions/runs/${value.run_id}`;
   const ref = digest ? `${IMAGE}@${digest}` : 'Pending verified image';
+  const packageFile = `opencodex-${value.release_tag}.tgz`;
   return `Upstream: [${value.upstream_tag}](https://github.com/lidge-jun/opencodex/tree/${value.upstream_sha})\n\n` +
     `Source: ${value.repository}@${value.source_sha} (branch: ${value.source_branch})\n\n` +
     `Workflow revision: ${value.workflow_sha}\n\nImage: \`${ref}\`\n\n[Build and verification run](${run})\n\n` +
     'The application version remains the upstream version. The numbered suffix identifies this fork artifact.\n\n' +
-    'Download the release evidence and follow VERIFY.md to verify the digest, keyless signature, SBOMs, and provenance.\n\n' +
+    `Package: [${packageFile}](https://github.com/${value.repository}/releases/download/${value.release_tag}/${packageFile})\n\n` +
+    'Download all release assets and follow VERIFY.md before installing the package. After verification, install the local tarball with `npm install -g ./' + packageFile + '` or `pnpm add -g ./' + packageFile + '`. The package is a release asset, not an npm registry publication.\n\n' +
     `<!-- ${PREFIX}${JSON.stringify(value)} -->\n`;
 }
 async function reserve({ github, context, core }) {
@@ -215,12 +218,24 @@ async function finalize({ github, context, core }) {
   const manifestBytes = readFileSync(join(directory, 'release-manifest.json'));
   const manifest = JSON.parse(manifestBytes);
   const digest = process.env.IMAGE_DIGEST;
+  const packageFile = `opencodex-${tag}.tgz`;
+  const version = value.upstream_tag.slice(1);
   if (!/^sha256:[a-f0-9]{64}$/.test(digest) || manifest.image_digest !== digest ||
-      manifest.schema_version !== 1 || manifest.repository !== value.repository ||
+      manifest.schema_version !== 2 || manifest.repository !== value.repository ||
       manifest.source_branch !== value.source_branch || manifest.run_id !== value.run_id ||
       manifest.source_sha !== value.source_sha || manifest.release_tag !== tag ||
       manifest.workflow_sha !== value.workflow_sha || manifest.upstream_tag !== value.upstream_tag ||
-      manifest.upstream_sha !== value.upstream_sha) throw new Error('Verified manifest binding mismatch');
+      manifest.upstream_sha !== value.upstream_sha ||
+      manifest.package_filename !== packageFile || manifest.package_name !== '@bitkyc08/opencodex' ||
+      !/^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-(?:[A-Za-z-][0-9A-Za-z-]*|0|[1-9][0-9]*)(?:\.(?:[A-Za-z-][0-9A-Za-z-]*|0|[1-9][0-9]*))*)?$/.test(version) ||
+      manifest.package_version !== version ||
+      !/^[a-f0-9]{64}$/.test(manifest.package_sha256) ||
+      !/^[a-f0-9]{128}$/.test(manifest.package_sha512)) throw new Error('Verified manifest binding mismatch');
+  const packageBytes = readFileSync(join(directory, packageFile));
+  if (createHash('sha256').update(packageBytes).digest('hex') !== manifest.package_sha256 ||
+      createHash('sha512').update(packageBytes).digest('hex') !== manifest.package_sha512) {
+    throw new Error('Verified package bytes differ from release manifest');
+  }
   const { data: release } = await github.rest.repos.getRelease({ ...repo, release_id: Number(process.env.RELEASE_ID) });
   if (release.tag_name !== tag) throw new Error('Release tag mismatch');
   const files = readdirSync(directory, { withFileTypes: true });

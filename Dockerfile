@@ -86,6 +86,25 @@ COPY --chown=bun:bun docker ./docker
 COPY --chown=bun:bun gui ./gui
 RUN cd gui && bun run build
 
+# BuildKit npm-compatible archive. Packaging is deliberately script-free: in
+# particular, package.json's prepack hook must not execute selected source.
+FROM build AS package-build
+WORKDIR /home/bun/app
+COPY --chown=bun:bun bin ./bin
+COPY --chown=bun:bun assets/banner.png assets/architecture.png assets/claude-code-models.gif assets/codex-app-picker.png ./assets/
+COPY --chown=bun:bun assets/sponsors/orcarouter.png assets/sponsors/tokenlab-light.png assets/sponsors/tokenlab-dark.png ./assets/sponsors/
+COPY --chown=bun:bun README.md SPONSORS.md AGENTS_INSTALL.md LICENSE .npmignore ./
+COPY --chown=bun:bun native/remote-workspace-helper/Cargo.toml native/remote-workspace-helper/Cargo.lock ./native/remote-workspace-helper/
+COPY --chown=bun:bun native/remote-workspace-helper/src ./native/remote-workspace-helper/src
+RUN mkdir -p /out \
+  && chmod 0755 bin/ocx.mjs \
+  && find gui/dist -type d -exec chmod 0755 {} + \
+  && find gui/dist -type f -exec chmod 0644 {} + \
+  && bun pm pack --ignore-scripts --filename /out/opencodex.tgz
+
+FROM scratch AS package
+COPY --from=package-build /out/opencodex.tgz /opencodex.tgz
+
 FROM ${BUN_IMAGE} AS runtime
 WORKDIR /home/bun/app
 ARG SOURCE_SHA=""

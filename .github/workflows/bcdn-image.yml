@@ -264,6 +264,25 @@ jobs:
           "$RUNNER_TEMP/bcdn-image-tools/syft" "oci-archive:$RUNNER_TEMP/bcdn-build-stage.tar" --scope squashed \
             -o spdx-json=build-evidence/build-dependencies.spdx.json \
             -o cyclonedx-json=build-evidence/build-dependencies.cyclonedx.json
+      - name: Export and inspect the installable npm archive
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+          export BUILDX_METADATA_PROVENANCE=max
+          context="https://github.com/$GITHUB_REPOSITORY.git#$SOURCE_SHA"
+          docker buildx build --builder bcdn-image --platform linux/amd64 --target package \
+            --file - --build-arg MANIFEST_STAGE=manifest-prepared \
+            --build-context prepared="$(pwd)/prepared" \
+            --metadata-file build-evidence/package-build-metadata.json \
+            --output "type=local,dest=$RUNNER_TEMP/bcdn-package" "$context" < trusted/Dockerfile
+          node trusted/.github/scripts/bcdn-image-provenance.mjs \
+            build-evidence/package-build-metadata.json "$GITHUB_REPOSITORY" "$SOURCE_SHA"
+          mv "$RUNNER_TEMP/bcdn-package/opencodex.tgz" "build-evidence/opencodex-$RELEASE_TAG.tgz"
+          python3 trusted/.github/scripts/bcdn-package.py "build-evidence/opencodex-$RELEASE_TAG.tgz" \
+            prepared/compatibility-version.json build-evidence/package-inventory.json
       - name: Transfer digest and build evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -360,7 +379,12 @@ jobs:
           mkdir -p evidence
           node trusted/.github/scripts/bcdn-image-manifest.mjs create evidence/release-manifest.json \
             "$GITHUB_REPOSITORY" "$SOURCE_BRANCH" "$SOURCE_SHA" "$UPSTREAM_TAG" "$UPSTREAM_SHA" \
-            "$RELEASE_TAG" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$digest"
+            "$RELEASE_TAG" "$WORKFLOW_SHA" "$GITHUB_RUN_ID" "$digest" \
+            "opencodex-$RELEASE_TAG.tgz" \
+            "$(node -p 'require("./received/build-evidence/package-inventory.json").package_name')" \
+            "$(node -p 'require("./received/build-evidence/package-inventory.json").package_version')" \
+            "$(node -p 'require("./received/build-evidence/package-inventory.json").package_sha256')" \
+            "$(node -p 'require("./received/build-evidence/package-inventory.json").package_sha512')"
           "$RUNNER_TEMP/bcdn-image-tools/syft" "registry:$image@$digest" --scope squashed \
             -o spdx-json=evidence/runtime.spdx.json \
             -o cyclonedx-json=evidence/runtime.cyclonedx.json
@@ -368,6 +392,7 @@ jobs:
           cp trusted/.github/scripts/bcdn-image-VERIFY.md evidence/VERIFY.md
           cosign sign --yes "$image@$digest"
           cosign sign-blob --yes --bundle evidence/release-manifest.sigstore.json evidence/release-manifest.json
+          cosign sign-blob --yes --bundle evidence/package.sigstore.json "evidence/opencodex-$RELEASE_TAG.tgz"
           printf 'image=%s\n' "$image" >> "$GITHUB_OUTPUT"
           printf 'digest=%s\n' "$digest" >> "$GITHUB_OUTPUT"
       - name: Attest GitHub provenance
@@ -377,6 +402,18 @@ jobs:
           subject-name: ${{ steps.evidence.outputs.image }}
           subject-digest: ${{ steps.evidence.outputs.digest }}
           push-to-registry: true
+      - name: Attest npm package provenance
+        if: steps.release.outputs.published != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: evidence/*.tgz
+      - name: Attest npm package release binding
+        if: steps.release.outputs.published != 'true'
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: evidence/*.tgz
+          predicate-type: https://github.com/${{ github.repository }}/attestations/bcdn-release/v1
+          predicate-path: evidence/release-manifest.json
       - name: Attest release binding
         if: steps.release.outputs.published != 'true'
         uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
@@ -428,7 +465,25 @@ jobs:
             > "$output_dir/manifest-signature-verification.txt" 2>&1
           node trusted/.github/scripts/bcdn-image-manifest.mjs verify evidence/release-manifest.json \
             "$DIGEST" "$RELEASE_TAG" "$SOURCE_SHA" "$WORKFLOW_SHA" \
-            "$UPSTREAM_TAG" "$UPSTREAM_SHA" "$SOURCE_BRANCH" "$GITHUB_RUN_ID"
+            "$UPSTREAM_TAG" "$UPSTREAM_SHA" "$SOURCE_BRANCH" "$GITHUB_RUN_ID" \
+            "evidence/opencodex-$RELEASE_TAG.tgz"
+          cosign verify-blob --certificate-identity "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            --bundle evidence/package.sigstore.json "evidence/opencodex-$RELEASE_TAG.tgz" \
+            > "$output_dir/package-signature-verification.txt" 2>&1
+          node trusted/.github/scripts/bcdn-image-provenance.mjs evidence/package-build-metadata.json \
+            "$GITHUB_REPOSITORY" "$SOURCE_SHA"
+          gh attestation verify "evidence/opencodex-$RELEASE_TAG.tgz" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml" \
+            --signer-digest "$WORKFLOW_SHA" --predicate-type 'https://slsa.dev/provenance/v1' \
+            --format json > "$output_dir/package-provenance-verification.json"
+          gh attestation verify "evidence/opencodex-$RELEASE_TAG.tgz" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/bcdn-image.yml" \
+            --signer-digest "$WORKFLOW_SHA" \
+            --predicate-type "https://github.com/$GITHUB_REPOSITORY/attestations/bcdn-release/v1" \
+            --format json > "$output_dir/package-binding-verification.json"
+          node trusted/.github/scripts/bcdn-package-attestation.mjs \
+            "$output_dir/package-binding-verification.json" evidence/release-manifest.json
           node trusted/.github/scripts/bcdn-image-registry.mjs verify "$GITHUB_REPOSITORY" "$DIGEST" \
             "$SOURCE_SHA" "$RELEASE_TAG" "$output_dir/image-registry-verification.json"
           if test "$PUBLISHED" = true; then
