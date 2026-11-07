@@ -252,7 +252,7 @@ jobs:
           mkdir -p evidence
           state=$(node trusted/.github/scripts/bcdn-image-release.mjs "$GITHUB_REPOSITORY" "$RELEASE_TAG")
           if test "$state" = published; then
-            gh release download "$RELEASE_TAG" --pattern '*' --dir evidence
+            gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern '*' --dir evidence
             printf 'published=true\n' >> "$GITHUB_OUTPUT"
           else
             printf 'published=false\n' >> "$GITHUB_OUTPUT"

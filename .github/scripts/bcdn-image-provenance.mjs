@@ -25,21 +25,23 @@ if (imageDigest) {
   });
   if (!matched) throw new Error("Verified attestation does not bind the selected release");
 } else {
-  const statement = data?.["buildx.build.provenance"];
-  const predicate = statement?.predicate ?? statement;
-  const materials = [
-    ...(predicate?.materials ?? []),
-    ...(predicate?.buildDefinition?.resolvedDependencies ?? []),
-  ];
+  // Buildx metadata serializes a SLSA v0.2 predicate even when the registry
+  // attestation is v1. A single-platform build can use either metadata key.
+  const entries = Object.entries(data ?? {}).filter(([key]) =>
+    key === "buildx.build.provenance" || key === "buildx.build.provenance/linux/amd64");
+  if (entries.length !== 1) throw new Error("Expected one Buildx provenance record");
+  const predicate = entries[0][1];
+  const materials = predicate?.materials ?? [];
   const matched = materials.some((material) => {
     const uri = material?.uri?.split(/[?#]/, 1)[0];
     const hash = material?.digest?.sha1 ?? material?.digest?.gitCommit;
     return sourceUris.has(uri) && hash === sourceSha;
   });
-  const configSource = predicate?.buildDefinition?.externalParameters?.configSource;
+  const configSource = predicate?.invocation?.configSource;
   const sourceMatch = sourceUris.has(configSource?.uri?.split(/[?#]/, 1)[0])
     && configSource?.digest?.sha1 === sourceSha;
-  const maxMode = !!predicate?.buildDefinition?.internalParameters?.buildConfig?.llbDefinition;
+  const steps = predicate?.buildConfig?.llbDefinition;
+  const maxMode = Array.isArray(steps) && steps.length > 0;
   if (!(matched || sourceMatch) || !maxMode) {
     throw new Error("BuildKit max provenance lacks the selected Git source material");
   }
