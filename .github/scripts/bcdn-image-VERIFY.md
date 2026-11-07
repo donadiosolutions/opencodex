@@ -4,18 +4,24 @@ Use the package's existing registry access model. Authenticate to GHCR before
 pulling if your account requires it. Verification needs Cosign 3.1.4, GitHub CLI
 with artifact attestation support, jq, and sha256sum.
 
-From the downloaded release assets:
+Set `RELEASE_TAG` to the release you intended to download and `WORKFLOW_SHA` to
+the full workflow commit from its trusted GitHub Actions run. Obtain these
+expected values independently of the downloaded assets. Then, from those assets:
 
 ```bash
-REPO=$(jq -r .repository release-manifest.json)
-DIGEST=$(jq -r .image_digest release-manifest.json)
-WORKFLOW_SHA=$(jq -r .workflow_sha release-manifest.json)
-IMAGE="ghcr.io/$REPO@$DIGEST"
+set -euo pipefail
+REPO=donadiosolutions/opencodex
+: "${RELEASE_TAG:?Set the expected release tag}"
+: "${WORKFLOW_SHA:?Set the expected workflow commit}"
 IDENTITY="https://github.com/$REPO/.github/workflows/bcdn-image.yml@refs/heads/custom"
 ISSUER=https://token.actions.githubusercontent.com
 cosign verify-blob --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" --bundle SHA256SUMS.sigstore.json SHA256SUMS
 sha256sum -c SHA256SUMS
 cosign verify-blob --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" --bundle release-manifest.sigstore.json release-manifest.json
+jq -e --arg repo "$REPO" --arg tag "$RELEASE_TAG" --arg workflow "$WORKFLOW_SHA" \
+  '.repository == $repo and .release_tag == $tag and .workflow_sha == $workflow' release-manifest.json
+DIGEST=$(jq -er .image_digest release-manifest.json)
+IMAGE="ghcr.io/$REPO@$DIGEST"
 cosign verify --certificate-identity "$IDENTITY" --certificate-oidc-issuer "$ISSUER" "$IMAGE"
 gh attestation verify "oci://$IMAGE" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/bcdn-image.yml" --signer-digest "$WORKFLOW_SHA" --predicate-type "https://github.com/$REPO/attestations/bcdn-release/v1"
 gh attestation verify "oci://$IMAGE" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/bcdn-image.yml" --signer-digest "$WORKFLOW_SHA" --predicate-type https://slsa.dev/provenance/v1
