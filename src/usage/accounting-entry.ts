@@ -31,7 +31,7 @@ function projectTier(outcome: NonNullable<PersistedUsageEntry["tierOutcome"]>): 
 /** Recent accounting retains meter facts; diagnostics have a separate retention horizon. */
 export function projectUsageAccountingEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const result: PersistedUsageEntry = {
-    ...pick(entry, ["requestId", "timestamp", "provider", "model", "surface", "apiKeyId", "admissionKind",
+    ...pick(entry, ["requestId", "timestamp", "provider", "model", "surface", "client", "apiKeyId", "admissionKind",
       "accountLogLabel", "resolvedModel", "status", "durationMs", "usageStatus", "totalTokens",
       "cacheProvenance", "responseServiceTier", "requestedServiceTier", "configuredServiceTier"]),
     ...(entry.usage ? { usage: projectUsage(entry.usage) } : {}),

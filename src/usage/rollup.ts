@@ -1,3 +1,4 @@
+import { normalizeRecordedClient } from "./client";
 import { baseProviderLabel } from "../providers/label";
 import { createReportingCalendar, type ReportingCalendar } from "./reporting-calendar";
 import type { PersistedUsageEntry } from "./log";
@@ -19,7 +20,10 @@ export interface UsageKeyAccounting {
   lastUsedAt: Record<string, number>;
   attributionSince: number | null;
 }
+export type UsageRollupSource = Pick<PersistedUsageEntry, "client" | "surface" | "apiKeyId" | "admissionKind">;
 export interface UsageRollupRecord {
+  /** Accounting dimensions only; no request IDs or raw client headers. */
+  source?: UsageRollupSource;
   kind: "usage-rollup";
   version: 1;
   timeZone: string;
@@ -47,11 +51,20 @@ export function parseUsageRollupRecord(value: unknown): UsageRollupRecord | null
   const record = value as UsageRollupRecord;
   if (record.version !== 1 || typeof record.timeZone !== "string" || !record.timeZone
     || !number(record.compactedBefore) || !Number.isSafeInteger(record.compactedBefore)
-    || Object.keys(record).some(key => !["kind", "version", "timeZone", "compactedBefore", "snapshot", "keyUsage"].includes(key))) {
+    || Object.keys(record).some(key => !["kind", "version", "timeZone", "compactedBefore", "snapshot", "keyUsage", "source"].includes(key))) {
     throw new Error("Invalid or unsupported usage rollup");
   }
   try { new Intl.DateTimeFormat("en", { timeZone: record.timeZone }); }
   catch { throw new Error("Invalid usage rollup timezone"); }
+  if (record.source !== undefined) {
+    const source = record.source;
+    if (!source || typeof source !== "object" || Array.isArray(source)
+      || Object.keys(source).some(key => !["client", "surface", "apiKeyId", "admissionKind"].includes(key))
+      || (source.client !== undefined && normalizeRecordedClient(source.client) !== source.client)
+      || (source.surface !== undefined && !["claude", "claude-desktop", "grok"].includes(source.surface))
+      || (source.apiKeyId !== undefined && (typeof source.apiKeyId !== "string" || !source.apiKeyId))
+      || (source.admissionKind !== undefined && !["configured", "environment", "loopback"].includes(source.admissionKind))) throw new Error("Invalid usage rollup source");
+  }
   assertUsageSummarySnapshot(record.snapshot);
   if (record.snapshot.window || (record.keyUsage !== undefined
     && (record.snapshot.filter !== null || !isKeyAccounting(record.keyUsage)))) throw new Error("Invalid usage rollup metadata");
@@ -66,7 +79,7 @@ export function isUsageRollupRecord(value: unknown): value is UsageRollupRecord 
   try { return parseUsageRollupRecord(value) !== null; } catch { return false; }
 }
 
-interface Cell { accumulator: UsageSummaryAccumulator; keyUsage?: UsageKeyAccounting }
+interface Cell { accumulator: UsageSummaryAccumulator; source?: UsageRollupSource; keyUsage?: UsageKeyAccounting }
 function emptyKeyUsage(): UsageKeyAccounting {
   return { configuredRequests: Object.create(null), lastUsedAt: Object.create(null), attributionSince: null };
 }
@@ -85,11 +98,11 @@ export class UsageRollupBuilder {
     this.calendar = createReportingCalendar(options.timeZone);
     if (!Number.isSafeInteger(options.compactedBefore) || options.compactedBefore < 0) throw new Error("Invalid usage compaction cutoff");
   }
-  private cell(dayStart: number, filter: UsageAccountingFilter | null): Cell {
-    const key = `${dayStart}:${accountingFilterKey(filter)}`;
+  private cell(dayStart: number, filter: UsageAccountingFilter | null, source?: UsageRollupSource): Cell {
+    const key = `${dayStart}:${accountingFilterKey(filter)}:${JSON.stringify(source)}`;
     let cell = this.cells.get(key);
     if (!cell) {
-      cell = { accumulator: createUsageSummaryAccumulator({ mode: "row-unique", timeZone: this.options.timeZone, ...(filter ? { filter } : {}) }),
+      cell = { source, accumulator: createUsageSummaryAccumulator({ mode: "row-unique", timeZone: this.options.timeZone, ...(filter ? { filter } : {}) }),
         ...(normalizeAccountingFilter(filter ?? {}) === null ? { keyUsage: emptyKeyUsage() } : {}) };
       this.cells.set(key, cell);
     }
@@ -98,6 +111,12 @@ export class UsageRollupBuilder {
   add(entry: PersistedUsageEntry): void {
     if (!Number.isSafeInteger(entry.timestamp) || entry.timestamp < 0 || entry.timestamp >= this.options.compactedBefore) throw new Error("Usage row is outside compaction bounds");
     const dayStart = this.calendar.startOfDay(entry.timestamp);
+    const source: UsageRollupSource = {
+      ...(entry.client !== undefined ? { client: entry.client } : {}),
+      ...(entry.surface !== undefined ? { surface: entry.surface } : {}),
+      ...(entry.apiKeyId !== undefined ? { apiKeyId: entry.apiKeyId } : {}),
+      ...(entry.admissionKind !== undefined ? { admissionKind: entry.admissionKind } : {}),
+    };
     const filters = new Map<string, UsageAccountingFilter | null>();
     const keys = entry.apiKeyId ? [null, entry.apiKeyId] : [null];
     for (const apiKeyId of keys) {
@@ -109,8 +128,8 @@ export class UsageRollupBuilder {
         add({ apiKeyId, provider }); add({ apiKeyId, model }); add({ apiKeyId, provider, model });
       }
     }
-    for (const filter of filters.values()) this.cell(dayStart, filter).accumulator.add(entry);
-    const metadata = this.cell(dayStart, null).keyUsage!;
+    for (const filter of filters.values()) this.cell(dayStart, filter, source).accumulator.add(entry);
+    const metadata = this.cell(dayStart, null, source).keyUsage!;
     if (entry.admissionKind) metadata.attributionSince = metadata.attributionSince === null
       ? entry.timestamp : Math.min(metadata.attributionSince, entry.timestamp);
     if (entry.admissionKind === "configured" && entry.apiKeyId) {
@@ -123,15 +142,16 @@ export class UsageRollupBuilder {
     if (record.timeZone !== this.options.timeZone || record.compactedBefore > this.options.compactedBefore) throw new Error("Incompatible usage rollup");
     const first = record.snapshot.partitions[0];
     if (!first) throw new Error("Usage rollup has no daily partition");
-    const cell = this.cell(first.dayStart, record.snapshot.filter);
+    const cell = this.cell(first.dayStart, record.snapshot.filter, record.source);
     cell.accumulator.mergeSnapshot(record.snapshot);
     if (record.keyUsage) mergeKeyUsage(cell.keyUsage!, record.keyUsage);
   }
   finish(): UsageRollupRecord[] {
     const records: UsageRollupRecord[] = [];
-    for (const { accumulator, keyUsage } of this.cells.values()) {
+    for (const { accumulator, keyUsage, source } of this.cells.values()) {
       const snapshot = accumulator.exportSnapshot();
       const record: UsageRollupRecord = { kind: "usage-rollup", version: 1, ...this.options, snapshot,
+        ...(source ? { source } : {}),
         ...(keyUsage ? { keyUsage: structuredClone(keyUsage) } : {}) };
       // Never publish an unreadable line. The caller can retain the original ledger on this rare limit.
       if (Buffer.byteLength(JSON.stringify(record)) >= 1_048_576) throw new Error("Usage rollup exceeds the accounting record limit");

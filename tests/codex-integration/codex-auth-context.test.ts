@@ -2312,6 +2312,7 @@ describe("cooldown error surface", () => {
 
     expect(response.status).toBe(503);
     expect(response.headers.get("Retry-After")).toBe("1");
+    expect(response.headers.get("x-opencodex-native-main-fence-reason")).toBeNull();
     const body = await response.json() as { error?: { message?: string; code?: string } };
     expect(body.error).toMatchObject({
       message: CODEX_MAIN_PROFILE_MAINTENANCE_MESSAGE,

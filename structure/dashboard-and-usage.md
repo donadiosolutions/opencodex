@@ -1,8 +1,6 @@
 # Dashboard Surfaces And Usage
 
-Dashboard page contracts, usage accounting and request metrics, and the management settings that
-back individual dashboard surfaces. An already-issued, otherwise valid remembered session can Forget after a User-Agent change; access and resumption still require the original browser binding. Serving, authentication boundaries, and `/api/*` ownership are
-in [GUI and management API](gui-and-management-api.md). Model-price editing and estimate selection follow [pricing](pricing.md).
+Dashboard page contracts, usage accounting and request metrics, and the management settings that back individual dashboard surfaces. An already-issued, otherwise valid remembered session can Forget after a User-Agent change; access and resumption still require the original browser binding. Serving, authentication boundaries, and `/api/*` ownership are in [GUI and management API](gui-and-management-api.md). Model-price editing and estimate selection follow [pricing](pricing.md).
 
 ## UX boundary
 
@@ -100,7 +98,7 @@ Accounts tab through `revealProviderAccounts` instead; following the same link a
 the entry when its filter is edited, and both targets re-read the hash on `hashchange`/`popstate`,
 so Back and Forward restore the prefilter. Tests live in `gui/tests/provider-protocol-panel.test.tsx`,
 `gui/tests/compatibility-protocol-filter.test.tsx`, `gui/tests/protocol-deep-links.test.ts`, `gui/tests/providers-deep-link.test.tsx`,
-`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS.
+`gui/tests/quota-summary-bar.test.tsx` and `gui/tests/combo-protocol-plan.test.tsx`; `gui/tests/quota-summary-hover-browser.ts` checks real pointer travel across the quota popover gap with production CSS. `gui/src/quota-summary.ts` selects fixed windows by semantic label and promotes critical credits over a noncritical preferred window; a critical preferred window retains priority. `gui/tests/quota-summary.test.ts` covers precedence and provider-label collisions.
 
 The API workspace gives `gui/src/components/section-tabs.tsx` its mobile reading
 line so scroll-spy and the top-bar offset agree; other consumers keep their
@@ -162,10 +160,12 @@ keeps the saved state and renders fixed `ocx sync` guidance without server/accou
 
 ## Usage accounting
 
+`src/usage/claude-compatibility-log.ts` owns the closed-code compatibility projection re-exported by `src/usage/log.ts`; its stored feature codes never retain free-form reasons.
+
 `OcxUsage.providerCredits` preserves provider-reported credit spend in request and attempt rows
 through `src/usage/log.ts` normalization and ledger reloads. Missing readings stay absent, and zero
 is a measured value. Separate attempts add credits when usage is merged. The field is independent
-of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`.
+of token estimation (`estimated` describes tokens) and is never treated as USD or token usage. The human log projection in `src/cli/observe.ts` includes the persisted request ID as `id=...` for direct use with `ocx logs get` and `ocx logs explain`. Rows without an ID or with control characters in their ID omit it rather than rewriting the lookup key; JSON and JSONL keep the API payload. `ocx logs history` pages the same derived index the dashboard uses (`GET /api/request-history`) with a resumable `nextCursor`. Client labels follow the [attribution contract](usage-client-attribution.md).
 
 ### Upstream key account attribution
 
@@ -276,7 +276,7 @@ first two is the loss signal. Provider debug formats one ring line per finalized
 counts and writes no second record. `GET /api/usage?failures=1` groups failed rows by a versioned
 fingerprint over closed vocabularies only, rebuilt through the same cooperative scanner and
 inheriting its bounds, so deleting a ledger row removes it from the grouping.
-`usage.jsonl` is the canonical mixed ledger: detailed request rows remain available for a rolling seven days, while older complete reporting days are replaced by versioned numeric `usage-rollup` records. `src/usage/compaction.ts` prepares the rewrite on a worker, verifies the source revision before publication under the existing spend-ledger owner, and leaves the source unchanged on malformed, oversized, unsupported, or invalid-timestamp input. Startup and hourly maintenance trigger compaction. Each rollup preserves the scalar provider/model/API-key filter cells, usage counts and coverage, account aggregates and the cost calculated at compaction time; its timezone is fixed in the record. `src/usage/accounting-store.ts` rebuilds one `usage-accounting.sqlite` from rollups and recent rows for shared summary, filter, key and timeline reads. This database is derived and rebuildable; rollups in `usage.jsonl` are the durable historical accounting.
+`usage.jsonl` is the canonical mixed ledger: detailed request rows remain available for a rolling seven days, while older complete reporting days are replaced by versioned numeric `usage-rollup` records. `src/usage/compaction.ts` prepares the rewrite on a worker, verifies the source revision before publication under the existing spend-ledger owner, and leaves the source unchanged on malformed, oversized, unsupported, or invalid-timestamp input. Startup and hourly maintenance trigger compaction. Each rollup preserves the scalar provider/model/API-key filter cells, usage counts and coverage, account aggregates and the cost calculated at compaction time; its timezone is fixed in the record. `src/usage/accounting-store.ts` rebuilds one `usage-accounting.sqlite` from rollups and recent rows for shared summary, filter, key and timeline reads. This database is derived and rebuildable; rollups in `usage.jsonl` are the durable historical accounting. New rollup cells retain the closed client label, surface, key ID and admission kind as accounting dimensions, so app/device reports and source facets include compacted usage without retaining raw headers or request identities. Older rollups remain readable; device-absence/admission filters and facets disclose unavailable source evidence with `usageIncomplete` instead of treating mixed historical cells as matching traffic. The derived index version rebuilds recent projections when client attribution becomes available.
 `GET /api/usage` keeps its default 30-day report and 366-day daily-chart cap, while lifetime totals remain uncapped. Its `history` metadata reports the seven-day detail boundary, available detail start, daily historical granularity, frozen historical-cost policy, timezone and compacted boundary. Custom historical bounds are accepted at day precision only where they intersect compacted history; recent detail retains exact timestamp filtering. Diagnostic detail views are limited to seven days. The former `usageLedgerMaxBytes` ceiling is advisory and cannot remove accounting records or seven-day details. A format downgrade requires restoring a compatible snapshot and replaying later writes; do not treat the derived SQLite database as a replacement for the canonical ledger.
 That index (`src/routing/history/`) rebuilds a ledger of at least `REQUEST_HISTORY_WORKER_REBUILD_MIN_BYTES` (1 MiB) on a worker thread (#6990): `rebuild-worker.ts`, driven by `rebuild-job.ts`, ingests the ledger snapshot the refresh recorded into a private `<index>.rebuild-<pid>-<n>` file through the same `ingest.ts` the inline path uses, switches it to WAL and closes it; the serving thread then closes the old index and renames the build over it. Async readers wait for the build; the routing-time sync entry never does and throws `RequestHistoryIndexBusyError`, which health scoring reads as unknown evidence. Health scoring (`src/routing/health.ts`) counts physical sends only: a request answered locally or refused before any send is no evidence for any target, and a row's terminal status and close reason score its last physical send, so a 200 stream cut mid-flight after a failover counts against the target that dropped it (`tests/server/health-scoring.test.ts`). A close discards the build, rejects waiting readers with `RequestHistoryIndexClosedError`, and removes the build files only after the worker thread exits. For 30 s after a worker build fails (other than on a replaced ledger), async readers and manual rebuilds rebuild inline instead, while routing-time reads keep reporting busy.
 
@@ -417,7 +417,7 @@ bases produce no probe; redirect refusal and quota parsing/cache semantics are u
 
 ## Provider debug logging
 
-Provider transport diagnostics (dropped SSE frames, adapter dial/stream events, etc.) are opt-in:
+`src/server/request-log-adapter-context.ts` copies at most 16 adapter context transformations per built request and deduplicates the same request object within its logging context without retaining the request. Provider transport diagnostics (dropped SSE frames, adapter dial/stream events, etc.) are opt-in:
 `ocx debug provider on` / `ocx debug provider off` on the running proxy, the Debug-page toggle, or `OCX_DEBUG=1` on
 the next start (legacy `OCX_DEBUG_FRAMES` still enables the same path). Lines
 use the `[ocx:<adapter>:<event>]` prefix, go to the proxy terminal, and are buffered for
