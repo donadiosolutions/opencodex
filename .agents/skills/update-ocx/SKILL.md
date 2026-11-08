@@ -1,13 +1,26 @@
 ---
 name: update-ocx
-description: Use when the local OpenCodex checkout and its global-node-tools installation must be refreshed from upstream while the active Codex session depends on that proxy.
+description: Update the OpenCodex fork from upstream through a reviewed PR and signed remote release, install its tarball into the local client/proxy, then delegate and monitor the remote Hub GitOps rollout.
 ---
 
 # Update OCX
 
-Refresh `custom` in `donadiosolutions/opencodex` from `upstream/main`, build a
-local npm tarball without linking it, publish it through `global-node-tools`, repair the
-supervised proxy, verify the effective immutable release, then commit and push.
+Merge `upstream/main` into `custom` in `donadiosolutions/opencodex` through a PR,
+publish a signed remote release, install its downloaded tarball through
+`global-node-tools`, verify the local client/proxy, then delegate and monitor
+the remote Hub's GitOps rollout in the `donadiosolutions/bcdn` Codex project.
+
+A full update includes that deployment handoff and monitoring. Honor explicitly
+narrowed requests. Editing this skill alone does not invoke its operational
+workflow or create a deployment thread.
+
+The local service is `opencodex-proxy.service` in connected **client** mode.
+`ocx service install` manages this local service; startup selects the client
+runtime from the saved Hub connection. Preserve that connection and any separate
+inference relay. In HTTP Hub-client mode the local listener serves management and
+readiness; the existing relay supplies Codex inference. Discover both addresses
+independently. Preserve this arrangement rather than enabling a local Hub or
+re-pairing.
 
 ## CONNECTION-SEVERING TRAP — NEVER SPLIT THE HANDOFF
 
@@ -59,145 +72,247 @@ path before dispatching the whole line in one terminal/tool call.
 | Blindly reinstall after reconnect | Disconnect does not reveal which transaction steps completed. |
 | Check only `current` or `ocx --version` | Neither proves what immutable path the live service executes. |
 
-## 1. Preflight
+## 1. Preflight and resume
 
-1. Read the repository instructions and use `lcm-memory`. Identify the primary
-   worktree with `git worktree list --porcelain`; when operating in another
-   local worktree, read `<primary-worktree>/AGENTS.local.md` if it exists.
-2. Require the current branch to be `custom` and `origin` to target
-   `donadiosolutions/opencodex` for both fetch and push, unless the user
-   explicitly selects another destination. Refuse detached HEAD and direct
-   operation on `main`, `dev`, or `preview` unless the user explicitly overrides
-   that branch boundary. Keep `upstream` pointed at `lidge-jun/opencodex`.
-3. By default, require an empty index and no tracked modifications. Record and
-   preserve unrelated untracked files.
-4. The clean-tracked-worktree rule is a safety default, not an invariant. A
-   direct user instruction may choose scoped stashing, selected commit-first
-   handling, named paths to preserve, or another approach. Apply that choice
-   only to its stated scope. Never infer an override from urgency, and never
-   stage, commit, stash, restore, or delete unrelated paths.
-5. Inspect and record:
-   - current branch, `HEAD`, and its `origin` destination;
-   - `global-node-tools status`, managed `current`, and managed `previous`;
-   - `ocx --version` and `readlink -f "$(command -v ocx)"`;
-   - systemd `ActiveState`, `SubState`, `MainPID`, `ExecStart`, and `ControlGroup`;
-   - `ocx service status` and the live `/readyz` body and port.
-6. Require the proxy to be active and ready before a session-preserving update.
+1. Read repository instructions and use `lcm-memory`. Find the primary worktree
+   with `git worktree list --porcelain` and read its `AGENTS.local.md` if present.
+   Require `origin` to target `donadiosolutions/opencodex` for fetch and push,
+   and `upstream` to target `lidge-jun/opencodex`, unless explicitly overridden.
+   Use `--repo donadiosolutions/opencodex` for GitHub CLI operations.
+2. Record worktree/index state and preserve unrelated files. Defer creating an
+   isolated branch/worktree until the resume and fresh no-op decisions below;
+   reuse the checkpointed worktree on resume. Never update on `main`, `dev`, or
+   `preview`. A selected dirty-worktree strategy applies only to its stated scope;
+   never infer permission to stash or discard.
+3. Check for any unfinished invocation before applying the fresh-update no-op.
+   Keep a mode-`0600`, git-ignored checkpoint under the `.tmp/update-ocx/`
+   directory in the primary worktree found above, even when the update uses an
+   isolated worktree. Verify that directory is ignored before writing. Include the
+   intended update, selected upstream commit, branch/PR, completed stage, run ID,
+   reserved tag, source/workflow SHAs, artifact hashes/image digest, pre-install
+   release/PID, child thread/host/cursor when known, and pending release-dispatch
+   or thread-creation intent. Never store credentials. An unfinished checkpoint blocks a
+   fresh invocation even if upstream has advanced or the new request selects a
+   different upstream tip. Resume it after live readback, or proceed only after
+   the user explicitly abandons it; report its recorded PR, reservation, artifact,
+   and thread state when abandoned. Inspect unresolved invocations before any
+   fresh no-op decision.
+4. For a full update, discover the release and Codex thread tools, including
+   `list_threads`/`read_thread` for rediscovery, and resolve the
+   `donadiosolutions/bcdn` project with `list_projects`. Record its identity but
+   create no deployment thread until local verification succeeds. If required
+   access/tools are unavailable, report the missing capability rather than
+   silently dropping a lifecycle stage or substituting a direct cluster rollout.
+5. Record `global-node-tools status`, resolved managed `current`/`previous`,
+   launcher, CLI version, and the user service's `ActiveState`, `SubState`,
+   `MainPID`, `ExecStart`, and `ControlGroup`. Read its actual local `/readyz`
+   address/port and require an active, ready client before installation. Do not
+   use a relay or remote Hub endpoint as proof of the local process.
+6. Capture private preservation evidence for client role, port, pairing identity,
+   token file/fingerprint, Hub connection, Codex configuration, and any relay.
+   Verify effective state homes. If the installing shell exports
+   `OPENCODEX_API_AUTH_TOKEN`, require it to equal the existing paired service
+   token: installation gives the shell's value precedence. Never print tokens
+   or replace a mismatching credential automatically.
+7. Read the effective Codex configuration and its relevant layer origins through
+   `config/read`, filtering output to routing/discovery fields; full config/layers
+   can contain secrets. Record the effective Codex home, selected profile/launch
+   overrides, user-layer version, and authentication mode from `account/read`
+   with `refreshToken: false`. Inspection must not log in/out or refresh tokens.
+   Preserve this installation's working contract: root `model_provider` absent
+   (built-in `openai`), root `openai_base_url` and
+   `experimental_realtime_ws_base_url` equal to the existing loopback inference
+   endpoint, ChatGPT login, `features.api_key_model_discovery = true`, no active
+   `model_catalog_json` override, and the commented custom-provider block.
+   Capture these facts privately without credential values. Investigate a
+   different baseline before installing; do not replace a user's newer choices.
+   Record the version of the same installed Codex binary used for the fresh
+   app-server inspection, rather than an unrelated PATH CLI, for the Hub's
+   `codexEntitlementClientVersion` setting; CLI inventory is not a substitute for
+   that explicit query-version configuration.
+   Capture representative third-party picker entries and reasoning levels using
+   the bounded app-server inspection described in section 6.
+8. Do not run `ocx connect`, `ocx sync`, or `ocx restore` as routine update repair.
+   The current HTTP Hub-client sync reinjects the dedicated `opencodex` provider;
+   connected-client service startup does not need that sync. Preserve existing
+   authentication, provider/history identities, and the separate inference relay.
 
-Use the exact Bun version pinned by the repository, not an arbitrary shell
-default. Resolve it from the active immutable release:
+## 2. Merge upstream and run focused regressions
+
+For a **fresh invocation**, fetch `origin/custom` and `upstream/main`, recording
+both immutable tips. If the selected upstream tip is already an ancestor of
+`origin/custom`, report that the upstream merge is already contained and no new
+update is initiated, before creating an update commit/PR,
+releasing, installing, restarting, or deploying. An unfinished invocation whose
+PR already merged resumes at its next unverified stage instead.
+
+Create the update branch from the fetched `origin/custom`. With
+`upstream_commit` set to the recorded upstream SHA, create a signed merge even
+when it could fast-forward. Capture the original head and leave the merge
+uncommitted for semantic review:
 
 ```bash
-gnt_bin="$(readlink -f "$(command -v global-node-tools)")"
-gnt_home="$(cd "$(dirname "$gnt_bin")/.." && pwd -P)"
-before_current="$(readlink -f "$gnt_home/current")"
-before_previous="$(readlink -f "$gnt_home/previous")"
-before_pid="$(systemctl --user show opencodex-proxy.service -p MainPID --value)"
-bun_bin="$before_current/node_modules/bun/bin/bun.exe"
-pinned_bun="$(node -p 'require("./package.json").dependencies.bun')"
-test -x "$bun_bin"
-test "$("$bun_bin" --version)" = "$pinned_bun"
-export PATH="$before_current/node_modules/.bin:$PATH"
-hash -r
-test "$(readlink -f "$(command -v bun)")" = "$bun_bin"
-test "$(bun --version)" = "$pinned_bun"
-```
-
-## 2. Merge upstream
-
-Fetch and inspect the divergence. If `upstream/main` is already an ancestor of
-`HEAD`, stop as an up-to-date no-op before building or installing anything.
-Otherwise create a merge commit with GPG signing and DCO signoff even when the
-history could fast-forward:
-
-```bash
-git fetch upstream main
-if git merge-base --is-ancestor upstream/main HEAD; then
-  printf 'Already contains upstream/main; nothing to update.\n'
-  exit 0
-fi
 pre_merge_head="$(git rev-parse HEAD)"
-git merge --no-ff --no-edit --signoff --gpg-sign upstream/main
+git merge --no-ff --no-commit "$upstream_commit"
 ```
 
+Review the merged tree semantically even when Git reports no textual conflicts.
 Resolve conflicts semantically. Preserve the intent of downstream overrides and
 fixes; supersede a downstream implementation when upstream provides a superior,
 semantically equivalent counterpart. Check moved helpers and changed model
 policies before retaining duplicate code or outdated test expectations. Never
-use a blanket ours/theirs resolution. If the merge stopped for conflicts,
-stage only resolved paths and finish it with:
+use a blanket ours/theirs resolution. Resolve and stage only intended paths.
+Require no unresolved index entries or conflict markers, then make the merge
+commit with:
 
 ```bash
 git commit --no-edit --gpg-sign --signoff
 ```
 
-Require `HEAD` to differ from `pre_merge_head`, require `upstream/main` to be an
-ancestor of the result, and require `HEAD` to be the new two-parent merge
-commit. Verify its signature and `Signed-off-by` trailer.
+Verify both parents exactly (`HEAD^1` equals `pre_merge_head`; `HEAD^2` equals
+`upstream_commit`), a valid signature and DCO trailer, and a clean
+`git diff --check`. Additional fixes also use signed, signed-off commits.
+Never rewrite upstream commits to add DCO trailers; use only an existing authorized
+exemption if an inherited-commit check rejects them, or report that blocker.
 
-## 3. Build and inspect the tarball — no repository test suite
+Run focused regressions for conflict resolutions and affected retained or
+superseded patches, including relevant tests whose dependencies are files read
+as data or subprocesses. Use the repository's exact toolchain pins; reuse the
+managed Bun only if its version matches the relevant pin. Install frozen
+lockfile dependencies only when needed for those tests. Keep execution bounded
+and record actual commands/results; do not rerun passing tests on unchanged code.
 
-Do **not** run `bun run prepush`, `bun run test`, the full test suite, standalone
-typecheck/lint gates, `privacy:scan`, or GUI doctor. The user selected the
-build, package-integrity, and live-runtime checks below as the acceptance gate.
+Do **not** run `bun run prepush`, `bun run test`, the full suite, standalone
+typecheck/lint/privacy gates, or GUI doctor for this update workflow. Focused
+regressions, required hosted checks, remote release verification, and live
+acceptance are the selected policy. These local waivers do not waive required
+hosted checks or authorize changing CI/protections.
 
-Install only from the lockfile, build the GUI/package, and pack without linking:
+## 3. Land the update through a PR
+
+Push only the feature branch, without force, and open a PR targeting `custom`
+using the repository template. Assign `bcdonadio`. Describe merge resolutions,
+retained/superseded patches, focused validation, and omitted broad local checks.
+Address applicable review findings and obtain required current-head checks and
+reviews, honoring explicit scoped exceptions already granted by the user.
+
+Keep the PR current with `origin/custom`; prefer `gh pr update-branch` to history
+rewrites, and revalidate changed resolutions. If required DCO checks reject its
+GitHub-generated branch-update merge, update locally with a signed, signed-off
+merge commit and push without force. Merge upstream-update PRs with
+`gh pr merge --merge --match-head-commit <reviewed-head>`, never squash or rebase:
+the upstream ancestry must survive for the next no-op check. If merge commits
+are unavailable, report that blocker rather than weakening ancestry or bypassing
+protection. Do not push directly to `custom`.
+
+Fetch `origin/custom` after merge. Verify it contains both the reviewed PR head
+and the selected upstream commit; record the PR merge and intended release source
+SHA in the checkpoint. Refresh a clean primary `custom` checkout with
+`git pull --ff-only origin custom` when safe; preserve newly appearing user work.
+
+## 4. Publish and verify the remote release
+
+Before dispatch, checkpoint `release-dispatch-requested` with the intended source
+SHA, workflow ref/revision, selected branch and UTC time. On resume or an ambiguous
+response, find matching `workflow_dispatch` runs since that time and adopt only
+an unambiguous match; investigate ambiguity before creating another reservation.
+Dispatch the existing [numbered release workflow](../../../.github/workflows/bcdn-release.yml)
+from the default `custom` workflow revision:
 
 ```bash
-bun install --frozen-lockfile
-mkdir -p .tmp
-npm run build:gui
-npm pack --pack-destination .tmp --json > .tmp/update-ocx-pack.json
-tarball="$(node -e 'const fs=require("node:fs"),path=require("node:path");const [p]=JSON.parse(fs.readFileSync(".tmp/update-ocx-pack.json","utf8"));if(!p)process.exit(2);process.stdout.write(path.resolve(".tmp",p.filename))')"
-test -f "$tarball"
+gh workflow run bcdn-release.yml --repo donadiosolutions/opencodex --ref custom -f source_branch=custom
 ```
 
-Never use `npm link`, `bun link`, or a repository-linking installer.
+Capture the returned run URL/ID, then its signed reservation, numbered tag,
+selected source SHA, workflow SHA, and official upstream tag/commit. Do not
+identify the run by merely taking the newest release. Require the selected
+source to contain the reviewed update and selected upstream commit. If `custom`
+advanced before reservation, inspect and validate the intervening changes under
+the same focused policy before accepting that different source. Accept intervening
+reviewed, merged changes after validating their interaction and recording them;
+reject unreviewed source rather than looping dispatches. Keep that run's source immutable. If a
+source/workflow fix lands through a PR and needs a new run, validate the change
+under the focused policy, then advance the active checkpoint to the new run ID,
+tag, source/workflow SHAs, and artifact/image digests. Retain the failed or
+superseded reservation as historical state; never rewrite it.
 
-Inspect the pack JSON and tarball. Require exactly one package with the expected
-name and version, plus all of these files:
+On resume and before rerunning, compare with newer published numbered `custom`
+releases. Do not rerun, install or deploy a superseded release without an explicit
+operator choice. For the current release, monitor image/package build, signatures,
+attestations, publication and promotion; require complete evidence and confirm the
+GHCR `latest` tag resolves to its verified digest. A superseded run is an exception
+to this promotion requirement and must never roll back GHCR `latest`.
 
-```text
-package/package.json
-package/gui/dist/index.html
-package/src/server/responses/collaboration.ts
-```
+Diagnose failures and fix the necessary blockers. Transient failures may rerun
+the same run, preserving its original source and reservation. Source or workflow
+fixes must land through another PR and a new release run; rerunning an old run
+cannot load the fix. Preserve failed drafts/reservations and never rewrite a
+published numbered tag. After an ambiguous dispatch, find the matching run before
+considering another dispatch.
 
-Require the packed `package.json` version to match the checkout. Compare the
-packed collaboration source byte-for-byte with the checkout so the local
-override is proven present. Confirm project skills, unrelated untracked files,
-and repository-only material are absent from the package.
+Download all assets from that exact published release into private ignored scratch
+space. Run the verification steps in a dedicated subshell (`(...)`) so shell
+options such as `set -euo pipefail` cannot affect the later handoff shell. Apply
+only the verification steps in the
+[verification contract](../../../.github/scripts/bcdn-image-VERIFY.md) and trusted
+helper/tool versions from the recorded workflow revision; verify any downloaded
+tool's pinned checksum. Do not run that document's global-install instructions:
+the `global-node-tools` handoff below is mandatory, and npm/pnpm global installs
+are not an alternate path. Check:
 
-## 4. Publish the SHA-512 artifact
+- The annotated reservation: extract `.github/scripts/bcdn-release.cjs` from the
+  recorded workflow SHA into scratch. Fetch the tag ref and annotated tag with
+  `gh api`; call its exported `reservation(message)` with `BCDN_COSIGN` pointing
+  to the verified Cosign binary. Require a non-null result, commit/tag binding,
+  and run, source, workflow and upstream identities matching the recorded run.
+  The helper verifies the `bcdn-release.yml@refs/heads/custom` signer, GitHub OIDC,
+  workflow SHA and dispatch trigger. Manifest, checksum, package and image
+  signatures instead use VERIFY's `bcdn-image.yml` signer identity.
+- Both package hashes, package provenance/release binding, image provenance/release
+  binding, runtime SBOMs, and the separate build dependency evidence.
+- The source SHA and workflow SHA separately: GitHub provenance names the workflow
+  revision, while the signed release predicate and BuildKit materials bind the
+  selected source. Require the requested upstream/update ancestry in that source.
+- The expected package name/version, safe regular-file inventory, executable
+  launcher, dashboard, generated compatibility manifest, and modified source bytes
+  against that selected source. Require the tarball and digest to belong to the
+  same verified release. Repository-only files and unrelated local files stay out.
 
-Copy the verified tarball directly into the managed artifact directory. The
-filename digest is part of the integrity contract:
+Do not install or deploy failed/unverified evidence. No local GUI build, tarball
+packing, `npm link`, `bun link`, or repository-linked install replaces the remote
+artifact. The internal package version remains upstream; the numbered suffix
+identifies this fork's release. Record the verified tarball and immutable image
+reference in the checkpoint before proceeding. Fetch that verified index by digest
+and record its `linux/amd64` image-manifest digest, excluding attestation manifests;
+pass both digest identities to the deployment thread.
+
+## 5. Stage the artifact and perform the handoff
+
+Resolve the managed artifact store from the installed `global-node-tools`
+controller, not a hard-coded workstation path. Set `tarball` to the verified
+release download. If handoff intent is already checkpointed, preserve its original
+baseline and go directly to section 6 recovery; do not re-stage or overwrite it.
+Before copying, require a 128-character lowercase hexadecimal
+SHA-512 matching the signed release manifest. Inspect an existing destination:
+reuse it only if it is a regular, non-symlink, mode-`0600` file with matching bytes;
+never overwrite an unexpected file or symlink. For an absent destination:
 
 ```bash
 digest="$(sha512sum "$tarball" | awk '{print $1}')"
 artifact="$gnt_home/artifacts/$(basename "${tarball%.tgz}").sha512-$digest.tgz"
 install -m 0600 "$tarball" "$artifact"
 test "$(sha512sum "$artifact" | awk '{print $1}')" = "$digest"
-stat -c 'artifact=%n mode=%a size=%s' "$artifact"
 ```
 
-Require a 128-character lowercase hexadecimal digest and mode `0600`. Do not
-install from the mutable `.tmp` tarball or through a symlink.
+Require the staged artifact to remain a regular, non-symlink, mode-`0600` file.
+Immediately refresh `before_current`, `before_previous`, service PID/readiness,
+state homes, token/pairing, and Codex routing preservation evidence, then checkpoint
+the handoff intent. Save private evidence outside the package/release assets.
 
-Immediately before the handoff, refresh and record `before_current`,
-`before_previous`, and `before_pid`.
-
-## 5. Perform the indivisible handoff
-
-**STOP AND CHECK THE TOOL-CALL BOUNDARY.** The following must be dispatched as
-one complete terminal/tool call. Do not run the first command until the second
-command is already part of that same submitted shell program:
-
-```bash
-global-node-tools install --bypass '<absolute-artifact-path>'; install_rc=$?; ocx service install; service_rc=$?; printf 'install_rc=%s\nservice_rc=%s\n' "$install_rc" "$service_rc"; handoff_rc=0; if [ "$install_rc" -ne 0 ]; then handoff_rc=1; fi; if [ "$service_rc" -ne 0 ]; then handoff_rc=1; fi; exit "$handoff_rc"
-```
-
-Both return codes must be zero before the target update can succeed.
+**Submit the exact single-shell command in the handoff section above**, with the
+literal absolute content-addressed artifact path substituted before dispatch.
+It remains the same command for a connected client/proxy. Both return codes must
+be zero for a successful handoff. Do not create the deployment thread yet.
 
 Do not answer or automate a GitHub-star prompt. If OpenCodex emits an agent
 deferral, ask the user exactly once near the top of the next response:
@@ -206,91 +321,164 @@ deferral, ask the user exactly once near the top of the next response:
 Star lidge-jun/opencodex? Yes / No
 ```
 
-## 6. Recover after a disconnected or ambiguous handoff
+## 6. Recover and verify the local client/proxy
 
-Inspect before retrying. Read back the managed `current` and `previous` links,
-release metadata, transaction status, `ocx --version`, resolved executable,
-service state, PID, `ExecStart`, its resolved launcher target, service cgroup,
-live runtime command line, and `/readyz`.
+After a disconnected or ambiguous handoff, inspect managed links, transaction and
+release metadata, resolved launcher, service state, actual processes/cgroup, and
+local `/readyz` before retrying. A lost tool response does not establish failure.
 
-- If the target release was published but the live runtime still executes an
-  older immutable path, run only `ocx service install`, then verify again. A
-  stable launcher resolving to the new release does not prove the existing
-  process has switched.
-- If the target is already live and ready, perform no mutation.
-- Retry package installation only when managed release metadata proves the
-  target transaction did not complete.
-- Never claim failure or success solely because the original tool response was
-  lost.
+- If the target installation was published but the live runtime is older, run only
+  `ocx service install`, then verify again.
+- If the target is already live and ready, skip further installation/service
+  changes and complete the remaining acceptance checks below.
+- If the target runs but remains unready after reconciliation, block deployment
+  and diagnose bounded startup evidence. Repair only the missing step within the
+  authorized scope; do not loop installation/service commands or invent rollback.
+- Retry package installation only when managed metadata proves the target
+  transaction did not complete, using the same indivisible handoff.
 
-## 7. Verify the effective release
+Require all of the following before delegating deployment:
 
-Require all of the following:
+1. Managed `current` is the target installation, with `previous` equal to the
+   checkpoint's pre-install `current`. Release metadata records `install`,
+   `bypass: true`, and the expected direct `@bitkyc08/opencodex` version.
+2. The actual package-manager backend locks the exact content-addressed tarball
+   and matching SHA-512 integrity. For npm inspect `package-lock.json`; for pnpm
+   inspect `pnpm-lock.yaml`'s direct importer/resolution and the managed hidden
+   npm lock when present. Resolve relative `file:` references against the release
+   directory. Do not require a root npm lock on a pnpm installation.
+3. The CLI version and launcher resolve into the target installation. For a stable
+   launcher unit, resolve its `current/bin/ocx` target; do not replace that design
+   with baked paths. For older baked units, verify their actual executable paths.
+4. The user service is `active/running`; its actual Bun runtime and OpenCodex
+   entry point execute from the target immutable release in its exact cgroup.
+   If `MainPID` is a Node/shell supervisor, inspect the Bun child too. Redact
+   credential-bearing arguments from process evidence.
+5. Local `/readyz` reports `opencodex`, the expected version, configured port,
+   `role: client`, `status: ready`, and that verified runtime PID. A relay/Hub
+   response, version equality, or `current` alone is insufficient proof.
+6. Installed package files, including source and every packaged dashboard file,
+   match the downloaded tarball's bytes and executable bits; check other modes
+   against the effective package backend's normalization. Compare source with the
+   recorded selected source, not a moving checkout; no local dashboard build is
+   needed. Fetch a static dashboard asset from the local client and compare bytes.
+7. Pairing, service token/fingerprint, remote Hub connection, client role/port,
+   Codex configuration, and any relay remain preserved. Examine changes rather
+   than ignoring a hash difference; catalog cache refreshes may be legitimate.
+   Unrelated worktree state still matches the preservation inventory.
 
-1. Managed `current` changed and managed `previous` equals `before_current`.
-2. `readlink -f "$(command -v ocx)"` resolves through the new release and
-   `ocx --version` matches the packed version.
-3. The new `release.json` records operation `install`, `bypass: true`, and the
-   expected direct `@bitkyc08/opencodex` version.
-4. The managed `package-lock.json` has lockfile version 3, points at the exact
-   content-addressed artifact, and records matching SHA-512 integrity. Resolve
-   a relative `file:` reference against the immutable release directory before
-   comparing it with the artifact's absolute path.
-5. systemd reports `active/running` with a nonzero PID.
-6. Inspect the actual `ExecStart` launch mode. For a baked Bun/CLI unit, its
-   executable paths must point into the new immutable release. For a stable
-   launcher unit, the absolute launcher named by `ExecStart` must resolve into
-   that release; do not replace the stable launcher merely to make the unit
-   contain a literal release path. Inspect `/proc/<MainPID>/cmdline` and the
-   live runtime process: the runtime must execute the new release's Bun and
-   OpenCodex entry point and belong to the unit's exact `ControlGroup`. If
-   `MainPID` is a shell or Node supervisor, verify the Bun child in that same
-   cgroup. Redact launch-proof arguments and other credentials from recorded
-   command lines.
-7. `/readyz` reports service `opencodex`, the expected version, the configured
-   port, and status `ready`. Its reported PID must be the verified runtime PID
-   in the service cgroup. Version equality alone is insufficient when an update
-   packages new source under the same version.
-8. The installed collaboration source is byte-identical to the checkout.
-   Compare every packaged `gui/dist` file with both the tarball and checkout;
-   use the tarball inventory so intentionally excluded build files are not
-   mistaken for missing installed assets.
-9. Unrelated worktree state matches the preflight inventory and any explicit
-   user-selected worktree override.
+### Preserve Codex routing and model discovery
 
-Symlink readback or a CLI version alone is not completion. The resolved unit
-launcher, live runtime path, cgroup membership, and readiness PID must agree.
+Read back the routing contract from preflight after the service handoff. Matching
+configuration needs no write. Keep the inference relay URL separate from local
+`/readyz`; a healthy management listener does not prove inference or discovery.
 
-## 8. Commit and push every successful update
+If the update introduced known routing drift, use Codex's supported
+`config/read` and `config/batchWrite` APIs with the latest user-layer
+`expectedVersion` and `reloadUserConfig: false`. Restore only the captured root
+URL fields and remove an update-introduced root `model_provider` selection
+(`value: null`, `mergeStrategy: replace`) to recover the built-in default.
+Remove a provider block or catalog override only if this update introduced it
+and it was absent in the baseline. Preserve the commented block, other provider
+definitions, feature settings, and all unrelated configuration. Reread/reconcile
+on a version conflict; investigate an overriding profile or managed requirement
+rather than overwriting another layer. Validate TOML and effective readback, and
+compare unrelated settings with the checkpoint. Never restore the whole old file
+over concurrent edits, replace login credentials, or retag conversations.
 
-After, and only after, live verification succeeds:
+Use a fresh instance of the installed Codex app-server with the intended home and
+launch settings to verify what a future launch loads. Run it in a dedicated
+transient user unit/cgroup; record its identity, stop only that unit afterward,
+and verify the cgroup is empty. Where unavailable, record its process group and
+descendant PID/start-time inventory and verify their exit. Never pattern-kill or
+restart the GUI, or claim an existing app-server changed its startup provider.
+Initialize the RPC connection, check filtered `config/read` and `account/read`
+results with `refreshToken: false`, without login/logout or token refresh, then paginate
+`model/list` with `includeHidden: false` until `nextCursor` is null. Require
+representative third-party models advertised by this Hub to be picker-visible,
+with their advertised reasoning levels. Capture the model IDs before installation
+and compare after; investigate disappearance or reasoning regression. A plain
+proxy `/v1/models` response alone cannot establish Codex picker compatibility.
+Provider credential fields, effective authentication, and catalog settings affect
+discovery; selecting `openai` alone does not guarantee it. Keep inspection bounded.
 
-1. Stage only intended paths. Never use `git add -A` or `git add .` in a dirty
-   worktree.
-2. Commit actual remaining intended changes with `--gpg-sign --signoff`. The
-   signed merge commit already counts as the update commit when it contains all
-   repository changes; never manufacture an empty commit.
-3. Verify signatures, DCO trailers, `git diff --check`, upstream ancestry, and
-   the user-selected worktree-state contract.
-4. Push `custom` to `origin` with `git push --no-verify origin custom`, never with
-   force. `--no-verify` bypasses only the deliberately waived local pre-push
-   hook; it does not weaken remote/ref verification or permit a force push.
-5. Query `refs/heads/custom` on `origin` with `git ls-remote` and require its SHA
-   to equal local `HEAD`. If the user explicitly selected another destination,
-   use that branch and remote in both the push and verification.
+Checkpoint successful local verification. A failed or unproven local recovery
+or Codex routing/discovery check blocks the deployment handoff.
 
-Do not commit or push when installation or live verification failed. A direct
-user instruction may override Git handling for that invocation; apply it only
-to the scope the user named.
+## 7. Delegate and monitor the Hub's GitOps rollout
 
-## Common mistakes
+For the full workflow, use the Codex harness tools to create **one new thread**
+in the project named `donadiosolutions/bcdn`. Resolve the current project ID with
+`list_projects`; never hard-code a UUID, host, or checkout path. Use the project's
+configured local environment and default model; omit model/reasoning overrides.
+Keep cluster implementation and operational recovery with that repository.
 
-| Mistake | Correction |
-| --- | --- |
-| Shell Bun differs from `package.json` | Use the bundled Bun from the active immutable release. |
-| `.tmp` tarball passed to the controller | Copy it to the SHA-512 artifact store first. |
-| Package manifest looks plausible | Also compare the locally modified packaged source byte-for-byte. |
-| Service command reports success | Prove the unit's resolved launcher, live runtime, cgroup, and `/readyz` PID agree on the new release. |
-| `ExecStart` names `current/bin/ocx` | This is the supported stable launcher. Resolve it and verify the running immutable runtime; do not rewrite it to an old baked-path design. |
-| Connection drops during handoff | Reconnect and inspect; do not blindly rerun. |
-| Existing tracked changes are present | Refuse by default or follow only the user's explicit scoped override. |
+Before calling `create_thread`, checkpoint a `deployment-thread-requested` stage
+with the release tag, run ID, and immutable image digest. Include the release tag
+and run ID as correlation markers in the initial prompt. If resuming this stage,
+search threads in the resolved project for those markers before creating
+anything; discover and continue an existing matching thread. After creation,
+checkpoint the returned thread and host IDs, or retain the pending client ID until
+thread discovery resolves it.
+If supported discovery cannot resolve an ambiguous or pending creation, report
+the correlation markers and request the thread identity; do not create a duplicate.
+
+The initial human-readable prompt must provide:
+
+- The verified `ghcr.io/donadiosolutions/opencodex@sha256:<digest>`, numbered
+  release/run URLs, source and workflow SHAs, verified `linux/amd64` manifest digest,
+  and relevant verification evidence.
+- The numbered release tag and workflow run ID as explicit correlation markers
+  for thread discovery and resume.
+- Confirmation that the downloaded tarball is installed and the local client/proxy
+  has recovered; this is the image from that same release.
+- The verified Codex client version. Have the destination repository maintain the
+  headless Hub's `codexEntitlementClientVersion` accordingly and verify fresh,
+  version-matching account evidence without fabricating local CLI inventory.
+- The instruction to read the target repository's guidance and complete its
+  GitOps update, required review/merge, reconciliation, replacement Pod startup,
+  and service acceptance. Delegate implementation decisions to that repository.
+- The acceptance evidence required below, and a request to continue through
+  recoverable failures under its policies and report any concrete blocker.
+
+Immediately checkpoint the returned thread ID and host ID. If creation is still
+pending, retain the returned client ID and resolve it through thread discovery;
+do not pass a client ID to tools requiring a thread ID. If the response is lost,
+look for the matching project/release task before creating another. On resume,
+continue monitoring the same thread rather than creating a duplicate rollout.
+
+Use `wait_threads` with that one thread/host, its latest cursor, and bounded waits
+of at most 60 seconds. Read additional thread detail only when needed. Send scoped
+follow-ups for incomplete evidence or corrective work within this image rollout.
+Report meaningful progress or real blockers; do not leave monitoring to a scheduled
+automation or finish at a merged PR or healthy reconciliation alone.
+
+Require the child to report the GitOps PR/commit and reconciliation, replacement
+Pod identity/startup and readiness, and the actual running image identity. Accept
+a Pod `imageID` only if it equals the verified image index digest or the
+digest of that index's `linux/amd64` image manifest, matched to the node platform.
+Reject attestation manifests and all other platform digests. Require an actual
+service operation proving recovery under the destination repository's acceptance
+policy. If the image was already deployed when resuming, verify the recorded
+replacement and current health without forcing a redundant restart.
+
+A rollback may restore service but does not complete deployment of the requested
+image. Continue remediation/monitoring within the authorized scope or report the
+concrete blocker and restored/failed state; never label that target deployed.
+After an interrupted connection, rediscover/read the child and service evidence
+before deciding which work remains.
+
+## 8. Completion and public/private boundary
+
+Mark the invocation complete only after both local verification and the delegated
+image rollout have succeeded, unless the user explicitly narrowed the requested
+scope. Report the update PR, release/run, tarball, immutable image reference,
+deployment thread, GitOps PR, and separate local and remote live proof. Include
+the harness's created-thread link/directive when applicable.
+
+The deployment project's name is permitted in this public skill. Keep credentials,
+internal endpoints, cluster topology, workstation paths, checkpoints, and private
+operational evidence out of public files, PRs, release assets, and build logs.
+Do not commit scratch evidence or change registry visibility. Failures remain
+recoverable through their recorded PR, reservation, artifact, and thread identity;
+do not claim a successful whole update while a required stage is incomplete.

@@ -1,4 +1,4 @@
 interface:
   display_name: "Update OCX"
-  short_description: "Update OCX without dropping Codex"
-  default_prompt: "Use $update-ocx to update custom in donadiosolutions/opencodex from upstream/main, rebuild and install the managed OCX tarball, refresh the live service without dropping this Codex session, then commit and push to origin/custom."
+  short_description: "Update the local OCX proxy and remote Hub via GitOps"
+  default_prompt: "Use $update-ocx for the full update: merge upstream into custom through a reviewed PR, publish and verify the remote release, install its downloaded tarball with the exact single-shell proxy handoff, verify local recovery and built-in openai routing/model discovery, then delegate to donadiosolutions/bcdn and monitor the Hub GitOps rollout until the replacement Pod runs the verified image and service operation succeeds."
