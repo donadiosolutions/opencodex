@@ -222,6 +222,8 @@ async function readUsageAccountingInner(options: { now?: number; filter?: UsageS
       if (record.source) {
         if (!matchesUsageSource(record.source as PersistedUsageEntry, source, configured)) continue;
       } else {
+        // Surface partitions cannot recover a specific app's client attribution.
+        if (source.client !== "all" && source.client !== "codex") usageSourceIncomplete = true;
         // Older rollups retain key-specific cells, but no absence/admission evidence.
         if (source.device.kind === "no-key" || source.device.kind === "unconfigured") {
           usageSourceIncomplete = true;

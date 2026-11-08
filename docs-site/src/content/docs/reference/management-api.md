@@ -472,7 +472,7 @@ older complete reporting days with versioned numeric rollups, preserving scalar 
 filter cells, coverage and counts, account statistics, and cost frozen at compaction time. Rollups
 store the reporting timezone. New rollups also preserve app/device accounting dimensions, so source
 filters and 30-day facets include compacted usage. Older rollups retain lifetime totals and key-specific
-cells but lack device-absence/admission evidence; affected filters and facets report `usageIncomplete`
+cells but lack specific-app and device-absence/admission evidence; affected filters and facets report `usageIncomplete`
 when that historical source evidence is unavailable. The API's `history` metadata describes `detailRetentionDays`,
 `detailAvailableFrom`, `historicalGranularity: "day"`, `historicalCostPolicy: "frozen"`, `timeZone`,
 and `compactedBefore`.

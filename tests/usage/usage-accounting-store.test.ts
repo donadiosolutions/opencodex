@@ -157,3 +157,25 @@ test("old rollups retain lifetime totals and disclose missing historical device 
   const otherKey = await readUsageAccounting({ now, filter: { sourceFilter: { client: "all", device: { kind: "key", id: "other" } } } });
   expect(otherKey.accumulator.summarize("all", now).summary.requests).toBe(0);
 });
+
+
+test("source-less Claude rollups disclose unavailable client attribution for all and keyed devices", async () => {
+  const builder = new UsageRollupBuilder({ timeZone: "UTC", compactedBefore: now - 7 * 86_400_000 });
+  builder.add({ ...entry("old-claude", now - 20 * 86_400_000), surface: "claude", apiKeyId: "one", admissionKind: "configured" });
+  const records = builder.finish().map(record => {
+    delete record.source;
+    record.snapshot.partitions.forEach(partition => delete partition.legacyUnclassifiedRequests);
+    return record;
+  });
+  writeFileSync(join(home, "usage.jsonl"), records.map(row => JSON.stringify(row)).join("\n") + "\n");
+  for (const device of [{ kind: "all" as const }, { kind: "key" as const, id: "one" }]) {
+    const unfiltered = await readUsageAccounting({ now, filter: { sourceFilter: { client: "all", device } } });
+    expect(unfiltered.accumulator.summarize("all", now).summary.requests).toBe(1);
+    expect(unfiltered.usageSourceIncomplete).toBe(false);
+    for (const client of ["claude_code", "claude_desktop", "grok", "opencode", "aside", "other"] as const) {
+      const report = await readUsageAccounting({ now, filter: { sourceFilter: { client, device } } });
+      expect(report.accumulator.summarize("all", now).summary.requests).toBe(0);
+      expect(report.usageSourceIncomplete).toBe(true);
+    }
+  }
+});
