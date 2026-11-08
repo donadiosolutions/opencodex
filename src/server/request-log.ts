@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { normalizeRecordedClient, type UsageClient } from "../usage/client";
 import { stampApiKeyAccountLabel, usesApiKeyAccount } from "../providers/label";
 import { KEY_ACCOUNT_LOG_LABEL_RE } from "../codex/account-label";
 import { attemptAccountChanged, sealRequestAttemptIdentity } from "./request-log-account-rotation";
@@ -22,12 +23,13 @@ import type { CodexAffinityMove, CodexAffinityReason } from "../codex/routing";
 import type { CodexAuthContext } from "../codex/auth-context";
 import { readCodexCatalogPath } from "../codex/catalog";
 import type { AttemptTierOutcome, OcxProviderConfig, OcxUsage } from "../types";
-import { captureSafely, diagnosticFinalizedClock, finalizeDiagnostics, finishAttemptDiagnostics, recordContextEstimate, recordContextTransformation, recordProtocolEvent, recordPersistenceOutcome } from "./transaction-capture";
+import { captureSafely, diagnosticFinalizedClock, finalizeDiagnostics, finishAttemptDiagnostics, recordContextEstimate, recordProtocolEvent, recordPersistenceOutcome } from "./transaction-capture";
 import { noteRecoveryDispatch } from "./transaction-recovery-capture";
 import { normalizeRouteDecisionTrace, type RouteDecisionTraceV1 } from "../routing/trace";
 import { parseProtocolTraceV1, type ProtocolTraceV1 } from "../protocols/dto";
 import { protocolTraceForRequest } from "../protocols/trace";
 import type { AdapterRequest } from "../adapters/base";
+import { recordAdapterContext } from "./request-log-adapter-context";
 import type { RequestSpendSettlement } from "./responses/request-spend";
 import type { AdapterTierMetadata } from "../providers/fastwire";
 import { UPSTREAM_RESET_REPLAY_REFUSED_CODE } from "../lib/upstream-retry";
@@ -130,6 +132,7 @@ export function cacheDiagnosticsObserving(): boolean {
 export interface RequestLogContext extends UpstreamErrorDiagnostics {
   model: string;
   provider: string;
+  client?: UsageClient;
   /** Optional process-lifetime aggregate sink, injected by the server composition owner. */
   requestMetricsRecorder?: RequestMetricsRecorder;
   /** Bounded terminal enum observed while inspecting a buffered response body. */
@@ -317,6 +320,7 @@ export function rebindCacheDiagnosticBody(
 
 export interface RequestLogEntry extends UpstreamErrorDiagnostics {
   requestId: string;
+  client?: UsageClient;
   /** The logical request this row belongs to (#4546); absent on rows written without a budget. */
   logicalRequestId?: string;
   timestamp: number;
@@ -516,6 +520,7 @@ export function requestLogEntryFromPersistedUsage(entry: PersistedUsageEntry): R
     timestamp: entry.timestamp,
     model: entry.model,
     provider: entry.provider,
+    ...(Object.hasOwn(entry, "client") ? { client: normalizeRecordedClient(entry.client) ?? "unknown" } : {}),
     ...(entry.firstOutputMs !== undefined ? { firstOutputMs: entry.firstOutputMs } : {}),
     ...(entry.genStartMs !== undefined ? { genStartMs: entry.genStartMs } : {}),
     ...(entry.lastOutputMs !== undefined ? { lastOutputMs: entry.lastOutputMs } : {}),
@@ -662,7 +667,13 @@ export function rehydrateRequestLogsAfterLedgerReplacement(
 export function addRequestLog(entry: RequestLogEntry) {
   // Rows keep proxy-owned error facts only; upstream error text and tokens stop here (both the
   // retained ring row and the usage.jsonl projection below read the projected entry).
+  const attemptNormalizationDropped = entry.attemptNormalizationDropped === true, client = normalizeRecordedClient(entry.client) ?? "unknown";
+  const clientDescriptor = Object.getOwnPropertyDescriptor(entry, "client");
+  if (!Object.isFrozen(entry) || !clientDescriptor?.enumerable || !("value" in clientDescriptor) || clientDescriptor.value !== client || Object.values(Object.getOwnPropertyDescriptors(entry)).some(descriptor => !("value" in descriptor))) {
+    entry = { ...entry, ...errorDetailFor(entry), client, ...(attemptNormalizationDropped ? { attemptNormalizationDropped: true } : {}) };
+  }
   entry = projectErrorDetail(entry);
+  if (attemptNormalizationDropped && entry.attemptNormalizationDropped !== true) entry = { ...entry, attemptNormalizationDropped: true };
   // Sanitize ONCE, at the ingress, and use that one value for both destinations.
   //
   // `addFinalRequestLog` is not the only way in: `addRequestLog` is exported and callable
@@ -741,6 +752,7 @@ export function addRequestLog(entry: RequestLogEntry) {
       timestamp: entry.timestamp,
       provider: entry.provider,
       model: entry.model,
+      client: entry.client ?? "unknown",
       ...(isKnownUsageSurface(entry.surface) ? { surface: entry.surface } : {}),
       // This function REBUILDS the persisted row field by field rather than
       // spreading it, so a field missing here reaches /api/logs and never
@@ -864,20 +876,6 @@ export function recordAttemptRequestedEffort(logCtx: RequestLogContext): void {
   } catch {
     // Request logging is best-effort and must not affect request delivery.
   }
-}
-
-const contextObservationOwners = new WeakMap<RequestLogContext, WeakSet<AdapterRequest>>();
-
-/** Copy adapter-owned bounded observations without retaining the built request. */
-function recordAdapterContext(logCtx: RequestLogContext, request: AdapterRequest): void {
-  captureSafely(() => {
-    let seen = contextObservationOwners.get(logCtx);
-    if (!seen) { seen = new WeakSet(); contextObservationOwners.set(logCtx, seen); }
-    if (seen.has(request)) return;
-    seen.add(request);
-    if (!Array.isArray(request.contextLog)) return;
-    for (const observation of request.contextLog.slice(0, 16)) recordContextTransformation(logCtx, observation);
-  });
 }
 
 /** Copy the adapter's exact outbound reasoning parameter into the durable request log. */
@@ -1676,6 +1674,7 @@ function writeFinalRequestLog(
     timestamp: start,
     model: isCombo ? logCtx.requestedModel! : logCtx.model,
     provider: isCombo ? "combo" : logCtx.provider,
+    client: normalizeRecordedClient(logCtx.client) ?? "unknown",
     ...(logCtx.surface ? { surface: logCtx.surface } : {}),
     ...(logCtx.apiKeyId ? { apiKeyId: logCtx.apiKeyId } : {}),
     ...(logCtx.admissionKind ? { admissionKind: logCtx.admissionKind } : {}),

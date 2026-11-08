@@ -72,7 +72,7 @@ test("a damaged checkpoint rebuilds without dropping or doubling entries", async
   closeUsageAccountingStore();
   const { Database } = await import("bun:sqlite");
   const db = new Database(join(home, "usage-accounting.sqlite"));
-  db.query("UPDATE accounting_meta SET value='{}' WHERE key='checkpoint-v1'").run();
+  db.query("UPDATE accounting_meta SET value='{}' WHERE key='checkpoint-v2'").run();
   db.close();
   expect((await readUsageAccounting({ now })).accumulator.summarize("all", now).summary.requests).toBe(1);
 });
@@ -107,4 +107,75 @@ test("damaged committed rollups fail while an uncommitted suffix is excluded", a
   closeUsageAccountingStore();
   writeFileSync(join(home, "usage.jsonl"), lines + '{"broken":\n');
   await expect(readUsageAccounting({ now })).rejects.toThrow("Invalid committed");
+});
+
+
+test("source-filtered lifetime reports and facets survive compaction without crossing devices", async () => {
+  const { readAccountingSourceFacets } = await import("../../src/usage/accounting-store");
+  const old = now - 20 * 86_400_000;
+  const rows: PersistedUsageEntry[] = [
+    { ...entry("cli-old", old), client: "codex_cli", apiKeyId: "one", admissionKind: "configured" },
+    { ...entry("cli-old-2", old), client: "codex_cli", apiKeyId: "one", admissionKind: "configured" },
+    { ...entry("claude-old", old), client: "claude_code", surface: "claude", apiKeyId: "two", admissionKind: "configured" },
+    { ...entry("cli-recent"), client: "codex_cli", apiKeyId: "one", admissionKind: "configured" },
+  ];
+  const builder = new UsageRollupBuilder({ timeZone: "UTC", compactedBefore: now - 7 * 86_400_000 });
+  rows.slice(0, 3).forEach(row => builder.add(row));
+  writeFileSync(join(home, "usage.jsonl"), [...builder.finish(), rows[3]].map(row => JSON.stringify(row)).join("\n") + "\n");
+  for (const client of ["all", "codex", "claude_code"] as const) {
+    const filter = { sourceFilter: { client, device: { kind: "all" as const } } };
+    const report = await readUsageAccounting({ now, filter });
+    const expected = (await import("../../src/usage/summary")).createUsageSummaryAccumulator({ mode: "row-unique", filter, timeZone: "UTC" });
+    rows.forEach(row => expected.add(row));
+    expect(report.accumulator.summarize("all", now)).toEqual(expected.summarize("all", now));
+  }
+  const removed = await readUsageAccounting({ now, filter: { sourceFilter: { client: "all", device: { kind: "unconfigured" } }, configuredApiKeyIds: ["one"] } });
+  expect(removed.accumulator.summarize("all", now).summary.requests).toBe(1);
+  const current = await readUsageAccounting({ now, filter: { sourceFilter: { client: "all", device: { kind: "unconfigured" } }, configuredApiKeyIds: ["one", "two"] } });
+  expect(current.accumulator.summarize("all", now).summary.requests).toBe(0);
+  const facets = await readAccountingSourceFacets({ client: "all", device: { kind: "all" } }, ["one", "two"], { since: old - 86_400_000, until: now });
+  expect(facets.apps.codex).toBe(3);
+  expect(facets.apps.claude_code).toBe(1);
+  expect(facets.devices.find(row => row.device.kind === "key" && row.device.id === "one")?.requests).toBe(3);
+  expect(facets.usageIncomplete).toBe(false);
+});
+
+test("old rollups retain lifetime totals and disclose missing historical device evidence", async () => {
+  const builder = new UsageRollupBuilder({ timeZone: "UTC", compactedBefore: now - 7 * 86_400_000 });
+  builder.add({ ...entry("old", now - 20 * 86_400_000), apiKeyId: "one", admissionKind: "configured" });
+  const records = builder.finish().map(record => {
+    delete record.source;
+    record.snapshot.partitions.forEach(partition => delete partition.legacyUnclassifiedRequests);
+    return record;
+  });
+  writeFileSync(join(home, "usage.jsonl"), records.map(row => JSON.stringify(row)).join("\n") + "\n");
+  const report = await readUsageAccounting({ now, filter: { sourceFilter: { client: "codex", device: { kind: "all" } } } });
+  expect(report.accumulator.summarize("all", now)).toMatchObject({ summary: { requests: 1 }, legacyUnclassifiedRequests: 1 });
+  const noKey = await readUsageAccounting({ now, filter: { sourceFilter: { client: "all", device: { kind: "no-key" } } } });
+  expect(noKey.accumulator.summarize("all", now).summary.requests).toBe(0);
+  expect(noKey.usageSourceIncomplete).toBe(true);
+  const otherKey = await readUsageAccounting({ now, filter: { sourceFilter: { client: "all", device: { kind: "key", id: "other" } } } });
+  expect(otherKey.accumulator.summarize("all", now).summary.requests).toBe(0);
+});
+
+
+test("source-less Claude rollups disclose unavailable client attribution for all and keyed devices", async () => {
+  const builder = new UsageRollupBuilder({ timeZone: "UTC", compactedBefore: now - 7 * 86_400_000 });
+  builder.add({ ...entry("old-claude", now - 20 * 86_400_000), surface: "claude", apiKeyId: "one", admissionKind: "configured" });
+  const records = builder.finish().map(record => {
+    delete record.source;
+    record.snapshot.partitions.forEach(partition => delete partition.legacyUnclassifiedRequests);
+    return record;
+  });
+  writeFileSync(join(home, "usage.jsonl"), records.map(row => JSON.stringify(row)).join("\n") + "\n");
+  for (const device of [{ kind: "all" as const }, { kind: "key" as const, id: "one" }]) {
+    const unfiltered = await readUsageAccounting({ now, filter: { sourceFilter: { client: "all", device } } });
+    expect(unfiltered.accumulator.summarize("all", now).summary.requests).toBe(1);
+    expect(unfiltered.usageSourceIncomplete).toBe(false);
+    for (const client of ["claude_code", "claude_desktop", "grok", "opencode", "aside", "other"] as const) {
+      const report = await readUsageAccounting({ now, filter: { sourceFilter: { client, device } } });
+      expect(report.accumulator.summarize("all", now).summary.requests).toBe(0);
+      expect(report.usageSourceIncomplete).toBe(true);
+    }
+  }
 });

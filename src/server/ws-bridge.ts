@@ -15,6 +15,8 @@ import { snapshotClientIdentity, type ClientIdentitySnapshot } from "./transacti
 import type { AudioSocketTarget } from "./audio-dictation";
 import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
+import { classifyUsageClient, type UsageClient } from "../usage/client";
+import { sessionLaneIdFromRequest } from "./request-log-conversation";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -53,6 +55,7 @@ export interface WsData {
   clientIdentitySnapshot?: ClientIdentitySnapshot;
   connectionId?: string;
   requestSequenceOnConnection?: number;
+  client?: UsageClient;
   responsesActivity?: CodexWebSocketActivity;
   nativeControl?: NativeResponseControl;
   /** Content-free per-turn explanation; never a model capability assertion. */
@@ -138,6 +141,7 @@ export function buildResponsesWsData(
   admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
   sessionLaneId?: string,
   clientHeaders?: Headers,
+  client?: UsageClient,
 ): WsData {
   // Auth is handshake-time only on this path: the per-frame contexts have no
   // request headers left to re-resolve from, so the decision rides along here.
@@ -149,9 +153,22 @@ export function buildResponsesWsData(
       && (clientHeaders.has("x-api-key") || clientHeaders.has("x-opencodex-api-key")),
     connectionId: `ws_${crypto.randomUUID()}`,
     requestSequenceOnConnection: 0,
+    ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),
   };
+}
+
+/** Capture the original handshake identity before restricting upstream headers. */
+export function buildResponsesWsDataFromRequest(
+  request: Request,
+  admission: DataPlaneAdmission,
+  admissionLease?: AdmissionReservation<ServerWebSocket<WsData>>,
+): WsData {
+  return buildResponsesWsData(
+    selectForwardHeaders(request.headers), admission, admissionLease,
+    sessionLaneIdFromRequest(request.headers), request.headers, classifyUsageClient(request.headers),
+  );
 }
 
 export class WsSendDroppedError extends Error {

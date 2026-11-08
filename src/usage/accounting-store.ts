@@ -7,10 +7,11 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { currentUsageLogRevision, usageLogIdentityKey, usageLogPath, usageLogRevisionKey, type PersistedUsageEntry, type UsageLogRevision } from "./log";
 import { scanUsageLedgerCooperatively, UsageLedgerRebuildRequiredError, type UsageLedgerScanResult } from "./ledger-scanner";
 import { projectUsageAccountingEntry } from "./accounting-entry";
-import { accountingFilterKey, parseUsageRollupRecord, type UsageAccountingFilter, type UsageRollupRecord } from "./rollup";
-import { createUsageSummaryAccumulator, type UsageSummaryAccumulator } from "./summary";
+import { accountingFilterKey, parseUsageRollupRecord, type UsageRollupRecord } from "./rollup";
+import { createUsageSummaryAccumulator, type UsageSummaryAccumulator, type UsageSummaryFilterInput } from "./summary";
 import { usageHistoryMetadata, type UsageHistoryMetadata } from "./retention-contract";
 import type { UsageTimeWindow } from "./time-range";
+import { matchesUsageSource, snapshotConfiguredKeyIds } from "./source-filter";
 import { userCostOverlayVersion } from "./user-cost-overlays";
 
 interface Checkpoint extends UsageLedgerScanResult {}
@@ -30,6 +31,7 @@ function serialize<T>(operation: () => Promise<T>): Promise<T> {
 export interface UsageAccountingResult {
   accumulator: UsageSummaryAccumulator;
   usageIncomplete: boolean;
+  usageSourceIncomplete?: boolean;
   revision: UsageLogRevision | null;
   processedThroughBytes: number;
   overlayVersion: number;
@@ -107,7 +109,7 @@ function openStore(): Store {
   for (const suffix of ["", "-wal", "-shm"]) {
     try { chmodSync(path + suffix, 0o600); } catch { /* Windows ACL owns permissions. */ }
   }
-  const saved = db.query("SELECT value FROM accounting_meta WHERE key='checkpoint-v1'").get() as { value: string } | null;
+  const saved = db.query("SELECT value FROM accounting_meta WHERE key='checkpoint-v2'").get() as { value: string } | null;
   let checkpoint: Checkpoint | null = null;
   try {
     if (saved) {
@@ -150,7 +152,7 @@ async function refreshStore(): Promise<Store> {
       onEntry(entry) { insertEntry.run(++sequence, entry.timestamp, JSON.stringify(projectUsageAccountingEntry(entry))); },
     });
     const checkpoint = { ...scan, oversizedRows: scan.oversizedRows + (append ? previous.oversizedRows : 0) };
-    db.query("INSERT OR REPLACE INTO accounting_meta VALUES('checkpoint-v1',?)").run(JSON.stringify(checkpoint));
+    db.query("INSERT OR REPLACE INTO accounting_meta VALUES('checkpoint-v2',?)").run(JSON.stringify(checkpoint));
     db.exec("COMMIT");
     if (!append) {
       try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* A reader can defer WAL reclamation. */ }
@@ -186,13 +188,15 @@ function dayBoundary(timestamp: number, timeZone: string, end: boolean): boolean
   return parts === "00:00:00";
 }
 
-async function readUsageAccountingInner(options: { now?: number; filter?: UsageAccountingFilter; window?: UsageTimeWindow } = {}): Promise<UsageAccountingResult> {
+async function readUsageAccountingInner(options: { now?: number; filter?: UsageSummaryFilterInput; window?: UsageTimeWindow } = {}): Promise<UsageAccountingResult> {
   const before = openStore().checkpoint;
   const store = await refreshShared();
   const checkpoint = store.checkpoint!;
   const now = options.now ?? Date.now();
-  const filter = options.filter ?? {};
-  const key = JSON.stringify([accountingFilterKey(filter), options.window, userCostOverlayVersion(), Math.floor(now / 60_000)]);
+  const inputFilter = options.filter ?? {};
+  const filter = { ...inputFilter, ...(inputFilter.sourceFilter?.device.kind === "key"
+    ? { apiKeyId: inputFilter.sourceFilter.device.id } : {}) };
+  const key = JSON.stringify([accountingFilterKey(filter), filter.sourceFilter, filter.configuredApiKeyIds, options.window, userCostOverlayVersion(), Math.floor(now / 60_000)]);
   const cached = reports.get(key);
   if (cached) return { ...cached, update: "unchanged" };
   let compactedBefore: number | undefined;
@@ -204,12 +208,38 @@ async function readUsageAccountingInner(options: { now?: number; filter?: UsageA
     compactedBefore = metadata.compactedBefore;
   }
   const accumulator = createUsageSummaryAccumulator({ mode: "row-unique", filter, window: options.window, timeZone });
+  let usageSourceIncomplete = false;
+  const configured = new Set(filter.configuredApiKeyIds ?? []);
   const records = store.db.query("SELECT payload FROM accounting_rollups WHERE filter=? ORDER BY offset").all(accountingFilterKey(filter)) as Array<{ payload: string }>;
   for (const row of records) {
     const record = parseUsageRollupRecord(JSON.parse(row.payload))!;
     compactedBefore = Math.max(compactedBefore ?? 0, record.compactedBefore);
     timeZone = record.timeZone;
-    if (!options.window || options.window.since < record.compactedBefore) accumulator.mergeSnapshot(record.snapshot);
+    if (options.window && options.window.since >= record.compactedBefore) continue;
+    const source = filter.sourceFilter;
+    let partitions = record.snapshot.partitions;
+    if (source) {
+      if (record.source) {
+        if (!matchesUsageSource(record.source as PersistedUsageEntry, source, configured)) continue;
+      } else {
+        // Surface partitions cannot recover a specific app's client attribution.
+        if (source.client !== "all" && source.client !== "codex") usageSourceIncomplete = true;
+        // Older rollups retain key-specific cells, but no absence/admission evidence.
+        if (source.device.kind === "no-key" || source.device.kind === "unconfigured") {
+          usageSourceIncomplete = true;
+          continue;
+        }
+        partitions = partitions.filter(partition => matchesUsageSource({
+          ...(partition.surface === "codex" ? {} : { surface: partition.surface === "grok" ? "grok" : "claude" }),
+          ...(source.device.kind === "key" ? { apiKeyId: source.device.id } : {}),
+        } as PersistedUsageEntry, source, configured));
+      }
+    }
+    if (partitions.length === 0) continue;
+    accumulator.mergeSnapshot({ ...record.snapshot, partitions: partitions.map(partition => ({
+      ...partition, legacyUnclassifiedRequests: partition.legacyUnclassifiedRequests
+        ?? (partition.surface === "codex" ? partition.totals.requests : 0),
+    })) });
   }
   const history = usageHistoryMetadata(now, compactedBefore, timeZone);
   const window = options.window;
@@ -227,7 +257,7 @@ async function readUsageAccountingInner(options: { now?: number; filter?: UsageA
   const result: UsageAccountingResult = {
     accumulator, history, timeZone, overlayVersion: userCostOverlayVersion(),
     revision: checkpoint.revision, processedThroughBytes: checkpoint.processedThroughBytes,
-    usageIncomplete: checkpoint.oversizedRows > 0,
+    usageIncomplete: checkpoint.oversizedRows > 0, usageSourceIncomplete,
     update: before === checkpoint ? "unchanged" : before ? "append" : "rebuild",
   };
   if (reports.size >= 8) reports.delete(reports.keys().next().value!);
@@ -235,8 +265,13 @@ async function readUsageAccountingInner(options: { now?: number; filter?: UsageA
   return result;
 }
 
-export function readUsageAccounting(options: { now?: number; filter?: UsageAccountingFilter; window?: UsageTimeWindow } = {}): Promise<UsageAccountingResult> {
-  const flight = serialize(() => readUsageAccountingInner(options));
+export function readUsageAccounting(options: { now?: number; filter?: UsageSummaryFilterInput; window?: UsageTimeWindow } = {}): Promise<UsageAccountingResult> {
+  const filter = options.filter;
+  const captured = filter ? { ...filter,
+    ...(filter.sourceFilter ? { sourceFilter: structuredClone(filter.sourceFilter) } : {}),
+    ...(filter.configuredApiKeyIds ? { configuredApiKeyIds: snapshotConfiguredKeyIds(filter.configuredApiKeyIds) } : {}),
+  } : undefined;
+  const flight = serialize(() => readUsageAccountingInner({ ...options, filter: captured }));
   reportFlights.add(flight);
   void flight.finally(() => reportFlights.delete(flight)).catch(() => {});
   return flight;
@@ -276,4 +311,31 @@ async function readAccountingKeyUsageInner(ids: string[], now = Date.now()): Pro
 
 export function readAccountingKeyUsage(ids: string[], now = Date.now()): ReturnType<typeof readAccountingKeyUsageInner> {
   return serialize(() => readAccountingKeyUsageInner(ids, now));
+}
+
+/** Facets consume the same compacted accounting as reports, never just recent detail. */
+export async function readAccountingSourceFacets(filter: import("./source-filter").UsageSourceFilter, ids: readonly string[], window: UsageTimeWindow) {
+  const captured = structuredClone(filter);
+  const configured = snapshotConfiguredKeyIds(ids);
+  return serialize(async () => {
+    const store = await refreshShared();
+    const { createSourceFacetAccumulator } = await import("./source-facets");
+    const accumulator = createSourceFacetAccumulator(captured, configured, window);
+    let usageIncomplete = store.checkpoint!.oversizedRows > 0 || store.checkpoint!.invalidRows > 0;
+    const records = store.db.query("SELECT payload FROM accounting_rollups WHERE filter=? ORDER BY offset").iterate(accountingFilterKey({}));
+    for (const row of records) {
+      const record = parseUsageRollupRecord(JSON.parse((row as { payload: string }).payload))!;
+      for (const partition of record.snapshot.partitions) {
+        if (partition.dayStart < window.since || partition.dayStart > window.until) continue;
+        if (!record.source) { usageIncomplete = true; continue; }
+        accumulator.add({ ...record.source, timestamp: partition.dayStart } as PersistedUsageEntry, partition.totals.requests);
+      }
+    }
+    let count = 0;
+    for (const row of store.db.query("SELECT payload FROM accounting_entries WHERE timestamp>=? AND timestamp<=? ORDER BY offset").iterate(window.since, window.until)) {
+      accumulator.add(JSON.parse((row as { payload: string }).payload));
+      if (++count % 1000 === 0) await new Promise<void>(resolve => setTimeout(resolve, 0));
+    }
+    return { ...accumulator.snapshot(), usageIncomplete };
+  });
 }

@@ -6,6 +6,7 @@ import { LanguageProvider } from "../src/i18n/provider";
 import Usage from "../src/pages/Usage";
 import { en } from "../src/i18n/en";
 import { hasDailyPrecision, requiresDailyPrecision } from "../src/pages/usage-history-retention-utils";
+import { resetApiAuthFetchForTests } from "../src/api";
 import { clearClientResourceStoresForTests } from "../src/client-resource";
 
 const globals = ["document", "window", "navigator", "localStorage", "sessionStorage", "ResizeObserver", "IS_REACT_ACT_ENVIRONMENT"] as const;
@@ -19,10 +20,15 @@ let request: { url: string; resolve: (response: Response) => void } | undefined;
 beforeEach(() => {
   descriptors = Object.fromEntries(globals.map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)])) as typeof descriptors;
   clearClientResourceStoresForTests();
+  resetApiAuthFetchForTests();
   browser = new Window({ url: "http://localhost/" });
   browser.localStorage.setItem("ocx-lang", "en");
   Object.defineProperties(globalThis, Object.fromEntries(globals.map(key => [key, { configurable: true, value: key === "IS_REACT_ACT_ENVIRONMENT" ? true : (browser as unknown as Record<string, unknown>)[key] }])))
-  globalThis.fetch = ((input: RequestInfo | URL) => new Promise<Response>(resolve => { request = { url: String(input), resolve }; })) as typeof fetch;
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    if (new URL(url).pathname !== "/api/usage") return Promise.resolve(Response.json({}, { status: 503 }));
+    return new Promise<Response>(resolve => { request = { url, resolve }; });
+  }) as typeof fetch;
 });
 
 afterEach(async () => {
@@ -50,6 +56,7 @@ async function mount() {
 function payload(history?: object) {
   return {
     ...(history ? { history } : {}), range: "30d", surface: "all", since: null,
+    sourceFilter: { client: "codex", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
     generatedAt: Date.now(), summary: { requests: 0, measuredRequests: 0, reportedRequests: 0,
       unreportedRequests: 0, unsupportedRequests: 0, estimatedRequests: 0, inputTokens: 0,
       outputTokens: 0, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, coverageRatio: 0 },

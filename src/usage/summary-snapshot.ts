@@ -1,4 +1,5 @@
 import type { UsageSummaryTotals, UsageSurface } from "./summary";
+import type { UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
 
 export type UsagePartitionSurface = Exclude<UsageSurface, "all"> | "other";
@@ -65,6 +66,7 @@ export interface UsageAccountAccumulator {
 }
 
 export interface UsagePartition {
+  legacyUnclassifiedRequests?: number;
   comboOverlap: boolean;
   date: string;
   dayStart: number;
@@ -87,6 +89,9 @@ export interface NormalizedUsageFilter {
   provider: string | null;
   model: string | null;
   apiKeyId: string | null;
+  sourceFilter?: UsageSourceFilter;
+  configuredApiKeyIds?: readonly string[];
+  configuredApiKeyIdSet?: ReadonlySet<string>;
 }
 
 /** JSON-safe numeric accounting state. Only row-unique accumulators may export. */
@@ -167,7 +172,7 @@ const partition = (value: unknown) => object(value, {
   oldestTimestamp: nullableNumber, totals: value => object(value, totalsRequired, totalsOptional),
   models: value => pairs(value, model), providers: value => pairs(value, model),
   accounts: value => pairs(value, account), modelOverlaps: value => Array.isArray(value) && value.every(overlap),
-});
+}, { legacyUnclassifiedRequests: integer });
 const filterValue = (value: unknown) => value === null || (text(value) && value.trim() === value && value.length > 0);
 const lowerFilterValue = (value: unknown) => filterValue(value) && (value === null || (value as string).toLowerCase() === value);
 export function isUsageSummarySnapshot(value: unknown): value is UsageSummarySnapshot {

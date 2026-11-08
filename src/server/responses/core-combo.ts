@@ -540,6 +540,7 @@ export async function executeComboResponses(
     }
     carryProxyErrorContext(childLog, logCtx);
     Object.assign(logCtx, childLog, {
+      client: logCtx.client,
       requestedModel: responseModel,
       model: responseModel,
       provider: "combo",
@@ -1412,6 +1413,7 @@ export async function executeComboResponses(
       settleComboReprobeSuccess(pick);
       carryProxyErrorContext(childLog, logCtx);
       Object.assign(logCtx, childLog, {
+        client: logCtx.client,
         requestedModel: responseModel,
         model: responseModel,
         provider: "combo",

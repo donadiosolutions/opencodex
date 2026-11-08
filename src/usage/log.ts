@@ -11,6 +11,7 @@ import { recordOwnedConfigPath } from "../lib/config-ownership";
 import { sanitizeLogMetadataString } from "../lib/redact";
 import { usageDisplayTotalTokens } from "./totals";
 import { usageDetailCutoff } from "./retention-contract";
+import { normalizeRecordedClient, type UsageClient } from "./client";
 import {
   normalizePersistedJevDecision,
   type PersistedJevDecisionV1,
@@ -35,7 +36,7 @@ import {
   type DiagnosticSendV1,
   type TransactionDiagnosticsV1,
 } from "../diagnostics/transaction";
-import { claudeCompatibilityReason, normalizeClaudeFeatureCodes, type ClaudeFeatureCode } from "../claude/compatibility";
+import { normalizeClaudeCompatibilityUsageLog, type PersistedClaudeCompatibilityLog } from "./claude-compatibility-log";
 import type { UpstreamCondition } from "../lib/upstream-condition";
 import { errorDetailFor, normalizeLogErrorCode } from "./error-detail";
 import type { CodexWsStageRecord, CodexWsTerminalEvent } from "../server/responses/codex-ws-wire";
@@ -58,22 +59,8 @@ import {
 export { ATTEMPT_RECOVERY_KIND_ROSTER, ATTEMPT_RECOVERY_WITHHELD_ROSTER, REQUEST_FAILURE_CAUSES, REQUEST_FAILURE_STAGES };
 export type { AttemptRecoveryKind, AttemptRecoveryWithheld, RequestFailureCause, RequestFailureStage, RequestSpendTotals };
 
-export interface PersistedClaudeCompatibilityLog {
-  decision: "shadow";
-  featureCodes: ClaudeFeatureCode[];
-  reason?: string;
-}
-
-/** Disk and in-memory callers share a closed-code projection; free-form reasons are discarded. */
-export function normalizeClaudeCompatibilityUsageLog(value: unknown): PersistedClaudeCompatibilityLog | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
-  const row = value as Record<string, unknown>;
-  if (row.decision !== "shadow") return undefined;
-  const featureCodes = normalizeClaudeFeatureCodes(row.featureCodes);
-  const reason = claudeCompatibilityReason(featureCodes, true);
-  if (!reason) return undefined;
-  return { decision: "shadow", featureCodes, reason };
-}
+export { normalizeClaudeCompatibilityUsageLog };
+export type { PersistedClaudeCompatibilityLog };
 
 export type UsageStatus = "reported" | "unreported" | "unsupported" | "estimated";
 /**
@@ -323,6 +310,8 @@ export function normalizeRequestSpend(value: unknown): PersistedRequestSpend | u
 export interface PersistedUsageEntry {
   requestedAlias?: string;
   requestId: string;
+  /** Best-effort classified client; absent only for records predating attribution. */
+  client?: UsageClient;
   /**
    * Identity of the ONE logical request this row belongs to (#4546), minted by
    * `createRequestExecutionBudget` at ingress. `requestId` identifies a log row; a retry layer,
@@ -1094,6 +1083,7 @@ function normalizeUsageEntry(entry: PersistedUsageEntry): PersistedUsageEntry {
   const protocolTrace = parseProtocolTraceV1(entry.protocolTrace);
   const normalized: PersistedUsageEntry = {
     requestId: entry.requestId,
+    ...(Object.hasOwn(entry, "client") ? { client: normalizeRecordedClient(entry.client) ?? "unknown" } : {}),
     ...(isLogicalRequestId(entry.logicalRequestId) ? { logicalRequestId: entry.logicalRequestId } : {}),
     timestamp: entry.timestamp,
     provider: entry.provider,
