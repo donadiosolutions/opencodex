@@ -597,8 +597,4 @@ provenance. The release publishes after verification with its evidence assets.
 Only successful `custom` releases promote the verified digest to `latest`;
 serialized promotion preserves newer custom releases during an older rerun.
 The application retains its upstream version. Package visibility is preserved,
-and this workflow has no deployment effect.
-The script-free npm archive includes the Cargo manifests, lockfiles and source for
-`native/remote-workspace-helper/` and `native/ocx-child/`, matching the package allowlist.
-The archive inventory requires the child manifests and binary/library entrypoints;
-shipping source does not provide a prebuilt child for remote planting.
+and this workflow has no deployment effect. The script-free archive includes the Cargo manifests, lockfiles and source for `native/remote-workspace-helper/` and `native/ocx-child/`; inventory verification requires the child entrypoints. Shipping source does not provide a prebuilt child for remote planting.
