@@ -122,6 +122,14 @@ describe("client fingerprint — anthropic OAuth headers", () => {
   const oauthProvider = { adapter: "anthropic", authMode: "oauth", baseUrl: "https://api.anthropic.com", apiKey: "oauth-tok-123" } as unknown as OcxProviderConfig;
   const apiKeyProvider = { adapter: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-ant-123" } as unknown as OcxProviderConfig;
 
+  test("Fable 5.2 fallback identity meets the upstream minimum CLI version", async () => {
+    const { headers } = await createAnthropicAdapter(oauthProvider).buildRequest(parsed({ modelId: "claude-fable-5-2" }));
+    const version = /^claude-cli\/(\d+)\.(\d+)\.(\d+) /.exec(headers["User-Agent"]!);
+    expect(version).not.toBeNull();
+    const [, major, minor, patch] = version!;
+    expect(Number(major) * 1_000_000 + Number(minor) * 1_000 + Number(patch)).toBeGreaterThanOrEqual(2_001_290);
+  });
+
   test("OAuth request carries the full Claude Code header set", async () => {
     const { headers } = await createAnthropicAdapter(oauthProvider).buildRequest(parsed());
     expect(headers["X-App"]).toBe("cli");
