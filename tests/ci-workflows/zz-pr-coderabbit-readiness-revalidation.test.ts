@@ -73,7 +73,7 @@ async function readGateScript(): Promise<string> {
   ).text();
   const workflow = Bun.YAML.parse(text) as Workflow;
   const script = workflow.jobs?.["enforce-target"]?.steps?.find(
-    step => step.name === "Enforce PR target, ancestry, and description",
+    step => step.name === "Enforce PR target and description",
   )?.with?.script;
   if (typeof script !== "string") {
     throw new Error("enforce-target step has no inline script");
@@ -135,15 +135,14 @@ describe("workflow comment-spam hardening", () => {
     );
     // Trusted scripts come from a fixed set of integration branches, never
     // from the pull request itself. `status` keeps the default-branch
-    // boundary that owns the event; a `main`-targeting PR matches the workflow
-    // definition loaded from `main`; the donadiosolutions fork's `custom`
+    // boundary that owns the event; the donadiosolutions fork's `custom`
     // target uses `custom`, and other bases resolve to `dev`.
     expect(checkoutStep?.with?.ref).toBe(
-      "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.event.pull_request.base.ref == 'main' && 'main' || (github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev')) }}",
+      "${{ github.event_name == 'status' && github.event.repository.default_branch || (github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev') }}",
     );
 
     const gateStep = job?.steps?.find(
-      step => step.name === "Enforce PR target, ancestry, and description",
+      step => step.name === "Enforce PR target and description",
     );
     const script = gateStep?.with?.script ?? "";
     expect(gateStep?.env?.RESOLVED_PULL_NUMBER).toBe(

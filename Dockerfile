@@ -96,6 +96,8 @@ COPY --chown=bun:bun assets/sponsors/orcarouter.png assets/sponsors/tokenlab-lig
 COPY --chown=bun:bun README.md SPONSORS.md AGENTS_INSTALL.md LICENSE .npmignore ./
 COPY --chown=bun:bun native/remote-workspace-helper/Cargo.toml native/remote-workspace-helper/Cargo.lock ./native/remote-workspace-helper/
 COPY --chown=bun:bun native/remote-workspace-helper/src ./native/remote-workspace-helper/src
+COPY --chown=bun:bun native/ocx-child/Cargo.toml native/ocx-child/Cargo.lock ./native/ocx-child/
+COPY --chown=bun:bun native/ocx-child/src ./native/ocx-child/src
 RUN mkdir -p /out \
   && chmod 0755 bin/ocx.mjs \
   && find gui/dist -type d -exec chmod 0755 {} + \

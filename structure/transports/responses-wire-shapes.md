@@ -1,6 +1,5 @@
 # Responses Wire Shapes
 ## Client rate-limit retry advice
-
 With a valid delay, `src/bridge/internal.ts` maps typed HTTP 429 `rate_limit_error` codes `resource_exhausted`, `rate_limit_exceeded`, and `slow_down` to `rate_limit_exceeded`. `src/lib/retry-delay.ts` formats typed and message-only rate-limit advice with the longest lower bound first; competing original hints are retained under an explicit provider-detail label. Other explicit verdicts, proxy replay budgets and event ordering are unchanged. Signed Anthropic progress follows the [progress-update contract](../providers/anthropic-progress.md). This creates no reasoning/history item; client retry policy, Grok HTTP status and combo preflight stay intact.
 ## Adapter incomplete reasons
 
@@ -56,7 +55,8 @@ stays unpinned. `tests/providers/alibaba-token-plan-wire-defaults.test.ts` cover
 replay flag.
 
 Trusted custom Responses relays may opt into `preserveResponsesInputItemIds` and `preserveResponsesMessageMetadata` for launcher replay (#6220). Ordinary destinations still strip IDs when `store: false` and private `internal_chat_message_metadata_passthrough`; xAI custom-call ID repair remains active.
-OpenAI-operated sends remove only the response-side `content_token_count` leaf from replayed private message metadata, preserving turn IDs and other fields. This applies before HTTP/WS serialization and at each native compact send; opted-in third-party relays keep their metadata unchanged. Google metadata follows the [destination-scoped replay projection](../providers/google.md#google-tool-call-thought-signature-replay).
+OpenAI-operated sends remove only the response-side `content_token_count` leaf from replayed private message metadata, preserving turn IDs and other fields. This applies before HTTP/WS serialization and at each native compact send; opted-in third-party relays keep their metadata unchanged.
+Exact upstream IDs in a provider’s `arkKimiResponsesModels` opt in to the Ark Kimi Responses projection. Drop only `output.encrypted_content` from includes. Drop only the cipher on an unreferenced empty-summary reasoning item immediately before a user message when preceded by a user or matching function call/result pair. A developer message is also an eligible following boundary, but only after a matching function call/result pair; a preceding user alone does not qualify. Preserve meaningful or unknown fields, and leave forward auth and other models untouched. Google metadata follows the [destination-scoped replay projection](../providers/google.md#google-tool-call-thought-signature-replay).
 
 xAI keeps `openai-chat` provider-wide; Grok 4.5/4.6/4.7 subscription Responses default to native `openai-responses`, retaining namespace, hosted-search and reasoning-replay normalization. The reserved `xai` OAuth transport is name-pinned
 to the Grok CLI gateway even if its saved base URL differs; custom provider IDs do not inherit this

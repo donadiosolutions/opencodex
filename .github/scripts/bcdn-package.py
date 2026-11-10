@@ -36,7 +36,9 @@ with tarfile.open(archive, 'r:gz') as package:
 
 required = ['package.json', 'gui/dist/index.html', 'bin/ocx.mjs', 'bin/package-main.mjs',
             'src/generated/compatibility-version.json', 'README.md', 'LICENSE', 'AGENTS_INSTALL.md',
-            'native/remote-workspace-helper/Cargo.toml', 'native/remote-workspace-helper/Cargo.lock']
+            'native/remote-workspace-helper/Cargo.toml', 'native/remote-workspace-helper/Cargo.lock',
+            'native/ocx-child/Cargo.toml', 'native/ocx-child/Cargo.lock',
+            'native/ocx-child/src/lib.rs', 'native/ocx-child/src/main.rs']
 if any(f'package/{name}' not in files for name in required):
     raise ValueError('Missing required package files')
 if metadata['name'] != '@bitkyc08/opencodex' or not re.fullmatch(r'\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?', metadata['version']):

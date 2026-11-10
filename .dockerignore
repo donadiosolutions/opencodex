@@ -57,5 +57,10 @@ gui/.vite/
 !native/remote-workspace-helper/Cargo.lock
 !native/remote-workspace-helper/src/
 !native/remote-workspace-helper/src/**
+!native/ocx-child/
+!native/ocx-child/Cargo.toml
+!native/ocx-child/Cargo.lock
+!native/ocx-child/src/
+!native/ocx-child/src/**
 
 **/*.log

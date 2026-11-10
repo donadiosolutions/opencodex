@@ -171,13 +171,13 @@ credential handoff, managed rotation and disconnection order.
 
 | File | Use it for |
 |---|---|
-| [Management index](references/01_management_surface.md) | declared capabilities in eight task chapters, with routes, flags and mutation notes (generated) |
+| [Management index](references/01_management_surface.md) | declared capabilities in nine task chapters, with routes, flags and mutation notes (generated) |
 | [JSON shapes](references/02_json_shapes.md) | response envelopes and error shapes |
 | [Recipes](references/03_recipes.md) | copy-paste sequences for real tasks |
 | [Failure semantics](references/04_failure_semantics.md) | exit codes, 503 classes, what to retry |
 | [Remote hub](references/05_remote_hub.md) | hub/client roles, when pairing is and is not needed, key rotation, disconnection |
 
-The generated index routes to eight task chapters. Lab includes local reads,
+The generated index routes to nine task chapters. Lab includes local reads,
 public evidence operations and explicit automation controls; it is not read-only.
 Read-oriented probes can contact providers, consume quota or refresh caches.
 Routing-profile writes use explicit file/revision workflows; discovered-model
