@@ -488,7 +488,9 @@ outage because a broad `ERROR` substring check rejected a successful backup.
 ### Handoff and monitoring
 
 Before calling `create_thread`, checkpoint a `deployment-thread-requested` stage
-with the release tag, run ID, and immutable image digest. Include the release tag
+with the release tag, run ID, immutable image digest, and initiating thread/host
+IDs from the active chat context. These are the report-back destination, not the
+new deployment thread IDs. Include the release tag
 and run ID as correlation markers in the initial prompt. If resuming this stage,
 search threads in the resolved project for those markers before creating
 anything; discover and continue an existing matching thread. After creation,
@@ -504,6 +506,12 @@ The initial human-readable prompt must provide:
   and relevant verification evidence.
 - The numbered release tag and workflow run ID as explicit correlation markers
   for thread discovery and resume.
+- The initiating thread/host IDs and the user's authorization, as part of this
+  invoked workflow, for the bcdn chat to send deployment results back there.
+  Explicitly instruct it to use `send_message_to_thread` on completion or a
+  concrete blocker, so the user does not have to relay results between chats.
+  Keep this authorization scoped to reporting this release to that initiating
+  chat; include the originating user request as authorization context.
 - Confirmation that the downloaded tarball is installed and the local client/proxy
   has recovered; this is the image from that same release.
 - The verified Codex client version. Have the destination repository maintain the
@@ -520,6 +528,15 @@ The initial human-readable prompt must provide:
   actual relay before reporting recovery. Pass the privately captured probe path
   through an appropriately private channel; never guess it from Hub readiness.
 
+The bcdn chat's report-back must include the release/run correlation markers,
+GitOps PR/merge commit and check results, reconciliation, replacement Pod identity
+and readiness, verified running image digest, fresh version-matching entitlement
+evidence, completed same-relay inference result, and private evidence location.
+For a blocker or rollback, report the target's incomplete state and current
+serving/recovery state. Send the report before finishing; do not wait for the
+initiating chat to acknowledge it. If delivery is unavailable or rejected, record
+that fact in the deployment chat's final result for the parent to retrieve.
+
 Immediately checkpoint the returned thread ID and host ID. If creation is still
 pending, retain the returned client ID and resolve it through thread discovery;
 do not pass a client ID to tools requiring a thread ID. If the response is lost,
@@ -530,7 +547,11 @@ Use `wait_threads` with that one thread/host, its latest cursor, and bounded wai
 of at most 60 seconds. Read additional thread detail only when needed. Send scoped
 follow-ups for incomplete evidence or corrective work within this image rollout.
 Report meaningful progress or real blockers; do not leave monitoring to a scheduled
-automation or finish at a merged PR or healthy reconciliation alone.
+automation or finish at a merged PR or healthy reconciliation alone. When the
+report arrives, verify its acceptance evidence and finish the remaining local
+checks and completion checkpoint autonomously. If the report-back is missing,
+retrieve the same deployment chat's result through `wait_threads`/`read_thread`;
+do not require the user to copy it or create another deployment chat.
 
 Require the child to report the GitOps PR/commit and reconciliation, replacement
 Pod identity/startup and readiness, and the actual running image identity. Accept
