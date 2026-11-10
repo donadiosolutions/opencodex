@@ -1160,6 +1160,12 @@ fields; `null` resets context/blocklist/compact-window values.
 
 ## Troubleshooting
 
+**Fable 5.2 reports that Claude Code 2.1.280 is unsupported** — Update OpenCodex
+when the request originates from Codex or another client using its fallback Anthropic
+OAuth identity. That identity must advertise at least 2.1.290. For requests carrying
+a genuine Claude Code client identity, update that Claude Code installation as well;
+OpenCodex preserves its reported version.
+
 ### Windows Desktop apply reports `client_lifecycle_lock_failed`
 
 Update OpenCodex if Desktop apply stalls while many old lock files are present. Lifecycle acquisition
