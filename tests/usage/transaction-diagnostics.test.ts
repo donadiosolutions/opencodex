@@ -434,7 +434,7 @@ test("WebSocket upgrade preserves sanitized identity separately from forward hea
   });
   const forwarded = selectForwardHeaders(headers);
   const socket = buildResponsesWsData(forwarded, { kind: "loopback" } as DataPlaneAdmission, undefined, undefined, headers);
-  expect(socket.headers?.has("user-agent")).toBe(false);
+  expect(socket.headers?.get("user-agent")).toBe(headers.get("user-agent"));
   expect(socket.headers?.has("x-request-id")).toBe(false);
   expect(JSON.stringify(socket.clientIdentitySnapshot)).not.toContain("private-machine");
   for (const turn of ["turn-one", "turn-two"]) {

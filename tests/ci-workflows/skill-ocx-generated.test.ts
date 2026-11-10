@@ -15,6 +15,7 @@ const GROUPS: Record<string, string[]> = {
   "providers-models": ["provider", "models", "alias"], accounts: ["account", "auth", "login", "logout"],
   "agents-routing": ["agent", "combo", "route", "fallback", "v2", "effort", "memory", "message", "advisor"], integrations: ["claude", "integration", "commandcode", "grok", "codex-shim"],
   "observe-system": ["companion", "usage", "logs", "storage", "inspect", "system", "observe", "debug", "export", "import", "cost", "update", "config", "tray"],
+  telemetry: ["telemetry"],
   "access-remote": ["link", "remote-workspace", "hub", "connect", "disconnect", "api", "access"], lab: ["lab"],
 };
 const FILENAMES = [INDEX, ...Object.keys(GROUPS).map(domain => `01_surface_${domain}.md`)];
@@ -102,7 +103,7 @@ function renderFixture(root: string, mutation: string) {
 }
 
 describe("generated operating-skill chapter contract", () => {
-  test("exactly eight chapters own all declarations once, in original order", () => {
+  test("exactly nine chapters own all declarations once, in original order", () => {
     const files = renderManagementSurfaces();
     expect(Object.keys(files)).toEqual(FILENAMES);
     expect(renderManagementSurfaces()).toEqual(files);

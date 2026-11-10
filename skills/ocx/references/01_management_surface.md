@@ -31,6 +31,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [agents-routing](01_surface_agents-routing.md) | 68 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 100 |
+| [telemetry](01_surface_telemetry.md) | 6 |
 | [access-remote](01_surface_access-remote.md) | 34 |
 | [lab](01_surface_lab.md) | 21 |
 
@@ -1375,6 +1376,30 @@ Original invocation order. These headings preserve links to the previous single-
 
 [Read-oriented task](01_surface_observe-system.md#ocx-companion-timeline)
 
+### `ocx telemetry status`
+
+[Read-oriented task](01_surface_telemetry.md#ocx-telemetry-status)
+
+### `ocx telemetry enable`
+
+[State-changing task](01_surface_telemetry.md#ocx-telemetry-enable)
+
+### `ocx telemetry disable`
+
+[State-changing task](01_surface_telemetry.md#ocx-telemetry-disable)
+
+### `ocx telemetry profile status`
+
+[Read-oriented task](01_surface_telemetry.md#ocx-telemetry-profile-status)
+
+### `ocx telemetry profile connect`
+
+[State-changing task](01_surface_telemetry.md#ocx-telemetry-profile-connect)
+
+### `ocx telemetry profile disconnect`
+
+[State-changing task](01_surface_telemetry.md#ocx-telemetry-profile-disconnect)
+
 ### `ocx disconnect`
 
 [State-changing task](01_surface_access-remote.md#ocx-disconnect)
@@ -1533,6 +1558,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 371
-- of those, state-changing: 228
+- declared capabilities: 377
+- of those, state-changing: 232
 - head-resolved invocations: 2

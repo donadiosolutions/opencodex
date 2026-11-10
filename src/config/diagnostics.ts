@@ -50,6 +50,7 @@ import {
   malformedQuotaResetNotifyWarning,
   malformedCatalogAutoRefreshWarning,
   malformedCodexPoolWarning,
+  malformedTelemetryWarning,
   malformedSpendWarning,
   rawConfigRecord,
   malformedNativeSubagentFields,
@@ -82,6 +83,7 @@ import {
   compactionRoutingSchema,
   reasoningRetentionSchema,
   skillsConfigSchema,
+  telemetryConfigSchema,
   memoryModelsSchema,
 } from "./schema/leaf-validators";
 
@@ -176,6 +178,8 @@ function validFileConfigDiagnostics(config: OcxConfig, rawParsed: unknown): Conf
   if (catalogRefreshWarning) warnings.push(catalogRefreshWarning);
   const codexPoolWarning = malformedCodexPoolWarning(rawParsed);
   if (codexPoolWarning) warnings.push(codexPoolWarning);
+  const telemetryWarning = malformedTelemetryWarning(rawParsed);
+  if (telemetryWarning) warnings.push(telemetryWarning);
   const spendWarning = malformedSpendWarning(rawParsed);
   if (spendWarning) warnings.push(spendWarning);
   const retentionWarning = degradedReasoningRetentionWarning(rawParsed, normalized);
@@ -710,6 +714,16 @@ function skillsConfigError(value: unknown): string | null {
   return "schema_invalid: skills" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
 }
 
+export function telemetryConfigError(value: unknown): string | null {
+  const raw = rawConfigRecord(value);
+  if (!raw || !Object.hasOwn(raw, "telemetry") || raw.telemetry === undefined) return null;
+  const result = telemetryConfigSchema.safeParse(raw.telemetry);
+  if (result.success) return null;
+  const issue = result.error.issues[0];
+  const field = issue?.path.join(".");
+  return "schema_invalid: telemetry" + (field ? "." + field : "") + ": " + (issue?.message ?? "invalid configuration");
+}
+
 export function validateConfigCandidate(value: unknown): { ok: true; config: OcxConfig } | { ok: false; error: string } {
   const chatgptDesktop = rawConfigRecord(value)?.chatgptDesktop;
   if (chatgptDesktop !== undefined && !chatgptDesktopSchema.safeParse(chatgptDesktop).success) {
@@ -775,6 +789,7 @@ export function validateConfigCandidate(value: unknown): { ok: true; config: Ocx
     ?? managementIngressConfigError(value)
     ?? metricsExportConfigError(value)
     ?? serviceHealthRecoveryConfigError(value)
+    ?? telemetryConfigError(value)
     ?? skillsConfigError(value);
   if (boundaryError) return { ok: false, error: boundaryError };
   const result = configSchema.safeParse(value);

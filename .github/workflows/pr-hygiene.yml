@@ -41,12 +41,10 @@ jobs:
           # PR's head, so `base.sha` let an unpromoted commit choose which code
           # runs with this job's issues/pull-requests write token.
           #
-          # The branch is chosen, not fixed: `pull_request_target` loads this
-          # workflow from the default branch, so a `main`-targeting PR must
-          # take its scripts from `main` too, or the gate runs a `main`
-          # workflow against `dev` scripts. The donadiosolutions fork also
-          # trusts its `custom` integration branch. Stacked bases resolve to `dev`.
-          ref: ${{ github.event.pull_request.base.ref == 'main' && 'main' || (github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev') }}
+          # `dev` is the upstream integration line. The donadiosolutions fork
+          # also trusts its `custom` integration branch for fork-targeting PRs.
+          # Other bases, including stacked children, resolve to `dev`.
+          ref: ${{ github.repository == 'donadiosolutions/opencodex' && github.event.pull_request.base.ref == 'custom' && 'custom' || 'dev' }}
           persist-credentials: false
           sparse-checkout: .github/scripts
 
