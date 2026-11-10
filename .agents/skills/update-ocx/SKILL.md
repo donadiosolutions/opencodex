@@ -72,6 +72,10 @@ path before dispatching the whole line in one terminal/tool call.
 | Blindly reinstall after reconnect | Disconnect does not reveal which transaction steps completed. |
 | Check only `current` or `ocx --version` | Neither proves what immutable path the live service executes. |
 
+The remote Hub may carry this session's inference too. Its downtime must obey
+the independently owned recovery contract in section 7; the local install
+handoff above does not make a separate Hub scale-to-zero safe.
+
 ## 1. Preflight and resume
 
 1. Read repository instructions and use `lcm-memory`. Find the primary worktree
@@ -131,7 +135,10 @@ path before dispatching the whole line in one terminal/tool call.
    `codexEntitlementClientVersion` setting; CLI inventory is not a substitute for
    that explicit query-version configuration.
    Capture representative third-party picker entries and reasoning levels using
-   the bounded app-server inspection described in section 6.
+   the bounded app-server inspection described in section 6. Privately record
+   this session's actual relay, authentication reference, transport and model
+   route, and require a bounded authenticated inference with expected output
+   before maintenance. Do not record credential values in the probe evidence.
 8. Do not run `ocx connect`, `ocx sync`, or `ocx restore` as routine update repair.
    The current HTTP Hub-client sync reinjects the dedicated `opencodex` provider;
    connected-client service startup does not need that sync. Preserve existing
@@ -366,6 +373,10 @@ Require all of the following before delegating deployment:
    Codex configuration, and any relay remain preserved. Examine changes rather
    than ignoring a hash difference; catalog cache refreshes may be legitimate.
    Unrelated worktree state still matches the preservation inventory.
+8. A bounded authenticated inference request through the actual relay, transport,
+   and model route used by this Codex session completes with the expected test
+   output. Capture that route privately before maintenance. Local `/readyz`,
+   `/v1/models`, and picker visibility are separate checks, not inference proof.
 
 ### Preserve Codex routing and model discovery
 
@@ -413,6 +424,59 @@ in the project named `donadiosolutions/bcdn`. Resolve the current project ID wit
 configured local environment and default model; omit model/reasoning overrides.
 Keep cluster implementation and operational recovery with that repository.
 
+### Hub downtime and relay recovery
+
+**Never issue a non-atomic scale-to-zero.** For an ordinary image update, keep
+desired replicas at one and let the existing GitOps controller own replacement
+under the repository's rollout strategy. Do not add a manual stop/start cycle.
+
+If the destination policy requires quiescing writers, require a reviewed,
+complete handoff before the first disruptive action. One bounded, independently
+supervised operation must already own quiescing, backup/restore work, release of
+production source mounts, service resumption, restoration of maintenance controls,
+and actual relay inference verification. Checkpoint its identity, prior state,
+recovery plan and private evidence location before dispatch. It must survive an
+agent/tool disconnect and need no later model response or tool call to recover.
+An async operation without that installed recovery owner is not sufficient.
+Before downtime, verify a durable fail-safe owner independent of the maintenance
+supervisor's process group and lifetime. Supervisor death or expiry must trigger
+that owner to fence/cancel maintenance, release production source mounts and
+restore the recorded serving state and controls without inference. Journal owned
+resources before mutation and fence recovery to the operation generation so it
+cannot overwrite an operator's subsequent restoration. A second branch in the
+same process is not a fail-safe. If this owner is absent, do not quiesce.
+
+Recovery must run on success, failure, signal, cancellation and timeout, with its
+own bounded recovery budget. A main-operation deadline must not kill recovery.
+Each control-restoration/cleanup failure must be recorded without skipping the
+remaining recovery actions. Release production source mounts before resuming
+writers. A single shell call or `finally` block alone does not prove these rules.
+If independent recovery cannot be established, leave the serving Hub untouched
+and report the missing prerequisite; do not try a split handoff.
+
+Record the initiating session's actual relay and transport/model route privately
+before downtime. Recovery requires a bounded authenticated inference through
+that same path, a completed response and expected test output from the intended
+backend. Pod readiness, Hub-local `/readyz`, a model list, and restored replicas
+do not establish recovery. If inference fails, report recovery as unverified;
+do not repeat quiescing or call the update complete.
+
+After interruption, read back the recorded operation and live state first.
+Preserve any operator restoration. Reuse successful backup snapshots with
+verified identity and consistency evidence for isolated restore checks without
+stopping production again; classify actual backup/Restic failures separately
+from metrics-delivery errors. Never repeat an
+outage because a broad `ERROR` substring check rejected a successful backup.
+
+| Temptation | Required response |
+| --- | --- |
+| Scale to zero now; dispatch recovery next | Reject it: the next model request may never run. |
+| A `finally` exists, so recovery is safe | Verify disconnect survival, every exit path, independent restoration steps and recovery budget first. |
+| Pod and `/readyz` are green | Require completed inference through the actual session relay. |
+| The operator restored service; start maintenance over | Read back state and existing backup evidence; preserve the restored service. |
+
+### Handoff and monitoring
+
 Before calling `create_thread`, checkpoint a `deployment-thread-requested` stage
 with the release tag, run ID, and immutable image digest. Include the release tag
 and run ID as correlation markers in the initial prompt. If resuming this stage,
@@ -440,6 +504,11 @@ The initial human-readable prompt must provide:
   and service acceptance. Delegate implementation decisions to that repository.
 - The acceptance evidence required below, and a request to continue through
   recoverable failures under its policies and report any concrete blocker.
+- The Hub downtime and relay recovery contract above: no non-atomic scale-to-zero,
+  no recovery dependent on another model/tool call, a reviewed independent recovery
+  owner before quiescing, and successful inference through the initiating session's
+  actual relay before reporting recovery. Pass the privately captured probe path
+  through an appropriately private channel; never guess it from Hub readiness.
 
 Immediately checkpoint the returned thread ID and host ID. If creation is still
 pending, retain the returned client ID and resolve it through thread discovery;
@@ -457,10 +526,12 @@ Require the child to report the GitOps PR/commit and reconciliation, replacement
 Pod identity/startup and readiness, and the actual running image identity. Accept
 a Pod `imageID` only if it equals the verified image index digest or the
 digest of that index's `linux/amd64` image manifest, matched to the node platform.
-Reject attestation manifests and all other platform digests. Require an actual
-service operation proving recovery under the destination repository's acceptance
-policy. If the image was already deployed when resuming, verify the recorded
-replacement and current health without forcing a redundant restart.
+Reject attestation manifests and all other platform digests. Require the completed
+authenticated inference response and expected output through the actual session
+relay, alongside the destination repository's acceptance evidence. Record probe
+time, transport/model route and response identity privately, without credentials
+or request/customer data. If the image was already deployed when resuming,
+verify the recorded replacement and current health without forcing a redundant restart.
 
 A rollback may restore service but does not complete deployment of the requested
 image. Continue remediation/monitoring within the authorized scope or report the
