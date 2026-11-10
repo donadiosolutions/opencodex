@@ -60,9 +60,13 @@ export type AccountAutoPauseObserver = ((response: Response) => Promise<Response
   physical?: (sameDestination: boolean, headers: Headers) => void;
 };
 /** Init fragment that reports the final send of the observer's attempt; empty when nothing observes. */
-export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string): Record<symbol, unknown> {
+export function physicalSendObserverInit(observer: AccountAutoPauseObserver | undefined, target: string, onPhysicalSend?: () => void): Record<symbol, unknown> {
   const physical = observer?.physical;
-  return physical ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => physical(destination === target, headers) } : {};
+  let noted = false;
+  return physical || onPhysicalSend ? { [PHYSICAL_SEND_OBSERVER]: (destination: string, headers: Headers) => {
+    if (onPhysicalSend && !noted) { onPhysicalSend(); noted = true; }
+    physical?.(destination === target, headers);
+  } } : {};
 }
 // One WS attempt and its HTTP fallback are one logical physical-send receipt.
 const WS_FALLBACK_RECEIPT = Symbol.for("opencodex.ws-fallback-receipt");
@@ -290,6 +294,8 @@ export interface ProviderFetchOptions {
   onTransport?: (transport: "http" | "websocket") => void;
   /** One-shot receipt after final local HTTP admission, immediately before executor entry. */
   onPhysicalDispatch?: () => void;
+  /** Repeatable admission for native successor creates, after pacing and auth checks. */
+  onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void;
   /**
    * Opt-in (#6969): let a Codex WebSocket send hold empty lifecycle frames so an authoritative
    * upstream refusal before any output settles as a replayable gateway status. Only a caller that
@@ -498,7 +504,7 @@ export function providerFetch(
             ? { ...event, target: diagnosticTarget(url, wsInit ?? init) } : event) : undefined,
         options.nativeControl,
         async () => { (await waitForPacing(init.signal ?? undefined))?.release(); },
-        process.env.OCX_CODEX_WS_INCREMENTAL_INPUT === "1", notifyOnce, options.preOutputRefusalHold),
+        process.env.OCX_CODEX_WS_INCREMENTAL_INPUT === "1", notifyOnce, options.preOutputRefusalHold, options.onContinuationDispatch),
         { provider, http: markEgressTransparentExecutor(fallback) });
       // A WS frame is a physical send like any other, so it runs the same override: that is where a
       // key-auth send is committed to its attempt row and the send budget is rebound to the

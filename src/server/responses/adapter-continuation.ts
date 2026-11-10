@@ -1,5 +1,7 @@
 import { carryProxyError, proxyErrorPresentation, isProxyError, rememberProxyErrorMessage } from "../../lib/client-error-body";
 import { bindAnthropicRejectionResponse } from "../../adapters/anthropic-rejection-memo";
+import { deferPhysicalSendReporter } from "./deferred-send-reporter";
+import { responsesSpendTarget } from "./request-spend-target";
 import { rotateAnthropicAccountOnResponseForInstance } from "../../oauth/anthropic-account-refusal";
 import type { ResponsesRequestContext } from "./core-options";
 import type { PreparedResponsesRequest } from "./request-prepare";
@@ -35,7 +37,7 @@ import {
   applyUpstreamRecoveryInit,
   isNonReplayableResponse, isSameTargetRetryHold,
   prepareSameTarget429Wait,
-  SendBudgetExhaustedError,
+  SendBudgetExhaustedError, errorDestinationLabel,
 } from "../../lib/upstream-retry";
 import { unwrapUpstreamRetryEvidenceError } from "../../codex/auth-context";
 import { AdmissionModelDeniedError, MODEL_NOT_ALLOWED_FOR_KEY } from "../admission-model-scope";
@@ -281,11 +283,13 @@ export function createAdapterContinuations(
         const fetchContinuationWithRetryPolicy = (route.provider.adapter === "google" || continuationTransientPolicy)
           ? fetchWithTransientRetry
           : fetchWithResetRetry;
+        const continuationReporter = transientSendReporter();
+        const deferredContinuation = (continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced)
+          && route.providerName === "github-copilot" && route.provider.authMode !== "forward"
+          ? deferPhysicalSendReporter(continuationReporter) : undefined;
         return await fetchContinuationWithRetryPolicy(
           recovery => {
-            sendBudgetState.adapterSendBudget?.startRequest?.({
-              poolId: logCtx.spendPoolId ?? route.providerName, identityId: logCtx.accountLogLabel,
-            });
+            sendBudgetState.adapterSendBudget?.startRequest?.(responsesSpendTarget(logCtx, route.providerName));
             transportState.noteRoutedAttemptSend(continuationEstimate, recovery ?? replayKind);
             return fetchWithHeaderTimeout(
               builtContinuationRequest.url,
@@ -301,6 +305,9 @@ export function createAdapterContinuations(
                 observeTransport: transportObserver(logCtx),
                 onTransport: transport => observeRequestTransport(logCtx, transport),
               dispatchOverride: oauthDispatch(builtContinuationRequest, nextParsed),
+                onPhysicalDispatch: deferredContinuation ? () => {
+                  if (!deferredContinuation.beforeDispatch()) throw new SendBudgetExhaustedError(errorDestinationLabel(builtContinuationRequest.url));
+                } : undefined,
                 providerName: route.providerName,
                 modelId: nextParsed.modelId,
               }),
@@ -315,7 +322,7 @@ export function createAdapterContinuations(
             ...(continuationTransientPolicy || sendBudgetState.adapterSendBudget?.spendEnforced
               ? {
                 attempts: remainingTransientSendBudget(continuationTransientPolicy?.attempts ?? 1),
-                onSendsConsumed: transientSendReporter(),
+                onSendsConsumed: deferredContinuation?.report ?? continuationReporter,
               }
               : {}),
           },

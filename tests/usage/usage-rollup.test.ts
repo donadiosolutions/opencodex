@@ -31,6 +31,49 @@ describe("durable numeric usage snapshots", () => {
     target.add(row());
     expect(target.summarize("all", timestamp).summary.requests).toBe(2);
   });
+  test("app counters survive JSON roundtrip, same-day merges and raw append", () => {
+    const entries = [
+      row({ client: "codex_cli" }),
+      row({ client: "claude_desktop", usage: { inputTokens: 40, outputTokens: 5 } }),
+      row({ client: "codex_desktop", usage: { inputTokens: 20, outputTokens: 5 } }),
+      row({ client: "claude_desktop", usage: undefined, usageStatus: "unreported" }),
+    ];
+    const raw = createUsageSummaryAccumulator({ mode: "row-unique" });
+    entries.forEach(entry => raw.add(entry));
+    const merged = createUsageSummaryAccumulator({ mode: "row-unique" });
+    for (const batch of [entries.slice(0, 2), entries.slice(2, 3)]) {
+      const source = createUsageSummaryAccumulator({ mode: "row-unique" });
+      batch.forEach(entry => source.add(entry));
+      merged.mergeSnapshot(JSON.parse(JSON.stringify(source.exportSnapshot())));
+    }
+    merged.add(entries[3]!);
+    const result = merged.summarize("all", timestamp);
+    expect(result).toEqual(raw.summarize("all", timestamp));
+    expect(result.apps).toEqual([
+      expect.objectContaining({ client: "codex", requests: 2, measuredRequests: 2, totalTokens: 135,
+        pricedRequests: 2, unpricedRequests: 0 }),
+      expect.objectContaining({ client: "claude_desktop", requests: 2, measuredRequests: 1, totalTokens: 45,
+        pricedRequests: 1, unpricedRequests: 1 }),
+    ]);
+  });
+  test("legacy v1 snapshots preserve accounting with unclassified apps", () => {
+    const source = createUsageSummaryAccumulator({ mode: "row-unique" });
+    source.add(row({ client: "codex_cli" }));
+    source.add(row({ client: "claude_desktop", usage: undefined, usageStatus: "unreported" }));
+    const snapshot = source.exportSnapshot();
+    snapshot.partitions.forEach(partition => { delete partition.apps; });
+    const merged = createUsageSummaryAccumulator({ mode: "row-unique" });
+    merged.mergeSnapshot(JSON.parse(JSON.stringify(snapshot)));
+    const expected = source.summarize("all", timestamp);
+    const result = merged.summarize("all", timestamp);
+    expect(result).toEqual({ ...expected, apps: [
+      { client: "unclassified", requests: 2, measuredRequests: 1, totalTokens: 110,
+        estimatedCostUsd: expected.summary.estimatedCostUsd, pricedRequests: 1, unpricedRequests: 1, shareRatio: 1 },
+    ] });
+    const restored = createUsageSummaryAccumulator({ mode: "row-unique" });
+    restored.mergeSnapshot(JSON.parse(JSON.stringify(merged.exportSnapshot())));
+    expect(restored.summarize("all", timestamp)).toEqual(result);
+  });
   test("builds parseable rollups and drops diagnostic details", () => {
     const builder = new UsageRollupBuilder({ timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, compactedBefore: timestamp + 1 });
     builder.add(row({ apiKeyId: "key-1", admissionKind: "configured", conversationId: "conversation-secret" }));
@@ -106,6 +149,10 @@ test("rejects invalid snapshots, incompatible filters, and exact-mode imports", 
     (value: any) => { value.partitions[0].models[0][1].firstSeen = NaN; },
     (value: any) => { value.requestId = "leak"; },
     (value: any) => { value.partitions.push(value.partitions[0]); },
+    (value: any) => { value.partitions[0].apps[0][0] = "unrecognized-app"; },
+    (value: any) => { value.partitions[0].apps.push(value.partitions[0].apps[0]); },
+    (value: any) => { value.partitions[0].apps[0][1].requests = -1; },
+    (value: any) => { value.partitions[0].apps[0][1].requestId = "leak"; },
   ]) {
     const invalid = structuredClone(snapshot); mutate(invalid);
     expect(() => target.mergeSnapshot(invalid)).toThrow();

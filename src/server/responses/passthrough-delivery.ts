@@ -1,5 +1,6 @@
 import { clientFacingModelText } from "../../lib/error-destination";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { carryPolicyCandidateRefusal } from "./policy-request-scope";
 import { markProxyError, rememberProxyErrorMessage, carryProxyError } from "../../lib/client-error-body";
 import { releaseRequestOwnedMainOnOutcome, isKeyedRequestOwnedMain } from "../../codex/request-owned-affinity";
 import { wasPermanentAccountRefusal } from "../../oauth/account-auto-pause";
@@ -17,6 +18,7 @@ import type { ResponsesTransport } from "./request-transport";
 import type { ResponsesSidecarAuth } from "./request-sidecar-auth";
 import type { ResponsesEffects } from "./response-effects";
 import type { PassthroughExchange } from "./passthrough-dispatch";
+import type { AuxiliaryModelSend } from "../../lib/request-execution-budget";
 import {
   sanitizePassthroughHeaders,
   createDownstreamDiagnosticInspector,
@@ -438,6 +440,7 @@ export async function deliverPassthroughResponse(
     | "localUpstream"
     | "terminalOutcomeRecorded"
   >,
+  dispatchSidecarSend?: AuxiliaryModelSend,
 ): Promise<Response> {
   const { route } = requestState;
   // The proof must belong to the response whose headers are published.
@@ -668,13 +671,13 @@ export async function deliverPassthroughResponse(
         turnAdmissionLease: options.turnAdmissionLease,
       });
       if (policyRefusal) return policyRefusal;
-      return carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
+      return carryPolicyCandidateRefusal(upstreamResponse, carryProxyError(upstreamResponse, formatPassthroughUpstreamError(upstreamResponse.status, errorText, {
         statusText: upstreamResponse.statusText,
         headers,
         // Provenance, not inference: `errorText` is empty when the bounded read finds nothing
         // display-safe, and an empty body is exactly what the retryable-429 default fires on.
         replayRefusal: isReplayRefusalResponse(upstreamResponse),
-      }));
+      })));
     }
 
     if (options.nativeControl && isNativeControlResponse(upstreamResponse) && upstreamResponse.body) {
@@ -790,6 +793,7 @@ export async function deliverPassthroughResponse(
             );
           },
           execute: createPassthroughWebSearchBridgeExecutor(webSearchBridgePlan, {
+            dispatchSidecarSend,
             providerApiKey: route.provider.apiKey ?? "",
             auth: webSearchBridgeAuth,
             hostedTool: parsed._webSearch,

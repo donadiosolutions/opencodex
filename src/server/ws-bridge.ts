@@ -17,6 +17,9 @@ import type { CodexWebSocketActivity } from "../codex/websocket-activity";
 import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
 import { classifyUsageClient, type UsageClient } from "../usage/client";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
+import { isProxyError } from "../lib/client-error-body";
+import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
+import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
 
 export { safeResponseHeaders } from "./safe-response-headers";
 
@@ -397,10 +400,16 @@ export async function pumpResponsesSseToWebSocket(
       && isCurrent()
       && ws.readyState === OPEN
       && !(err instanceof WsSendDroppedError)) {
+      reportTerminal(err instanceof NativeContinuationRefusalError ? "failed" : "incomplete");
       try {
-        sendUpstreamError(ws, 502, err);
-        observeDelivery(options.onFrameSent, "error");
-        reportTerminal("incomplete");
+        if (err instanceof NativeContinuationRefusalError) {
+          await sendResponseToWebSocket(ws, err.response, isCurrent, {
+            onSsePayload: options.onSsePayload, onFrameSent: options.onFrameSent,
+          });
+        } else {
+          sendUpstreamError(ws, 502, err);
+          observeDelivery(options.onFrameSent, "error");
+        }
       } catch (sendErr) {
         // If delivery is already dropped, there is no useful error frame left
         // to send. Swallow only that expected transport signal; other failures
@@ -478,7 +487,10 @@ export async function sendResponseToWebSocket(
   if (!response.ok) {
     const text = await response.text().catch(() => "");
     if (!isCurrent()) return;
-    const payload = JSON.stringify(buildWsErrorFrame(response.status, errorPayloadFromText(text), response.headers));
+    const frame = buildWsErrorFrame(response.status, errorPayloadFromText(text), response.headers);
+    const refusal = isProxyError(response) ? response.headers.get(WORKFLOW_LOCAL_REFUSAL_HEADER) : null;
+    if (refusal) (frame.headers as Record<string, string>)[WORKFLOW_LOCAL_REFUSAL_HEADER] = refusal;
+    const payload = JSON.stringify(frame);
     try {
       options.onSsePayload?.(payload);
     } catch {

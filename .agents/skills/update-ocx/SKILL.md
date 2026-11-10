@@ -5,7 +5,8 @@ description: Update the OpenCodex fork from upstream through a reviewed PR and s
 
 # Update OCX
 
-Merge `upstream/main` into `custom` in `donadiosolutions/opencodex` through a PR,
+Merge the latest tagged stable upstream release into `custom` in
+`donadiosolutions/opencodex` through a PR,
 publish a signed remote release, install its downloaded tarball through
 `global-node-tools`, verify the local client/proxy, then delegate and monitor
 the remote Hub's GitOps rollout in the `donadiosolutions/bcdn` Codex project.
@@ -146,10 +147,17 @@ handoff above does not make a separate Hub scale-to-zero safe.
 
 ## 2. Merge upstream and run focused regressions
 
-For a **fresh invocation**, fetch `origin/custom` and `upstream/main`, recording
-both immutable tips. If the selected upstream tip is already an ancestor of
-`origin/custom`, report that the upstream merge is already contained and no new
-update is initiated, before creating an update commit/PR,
+For a **fresh invocation**, fetch `origin/custom` and select the latest published
+stable release from `lidge-jun/opencodex` (GitHub's `releases/latest` endpoint).
+Require `draft: false`, `prerelease: false`, and an exact `vMAJOR.MINOR.PATCH` tag;
+exclude preview/prerelease tags. Fetch that exact tag from `upstream`, peel it to
+its commit, and record the release URL, tag, immutable commit and fork base SHA.
+Use that recorded commit throughout the invocation, even if a newer release
+appears. Never substitute a branch tip or a stale remote-tracking reference for
+the release tag. If release/tag discovery is unavailable or inconsistent, report
+the blocker rather than guessing. If the selected release commit is already an
+ancestor of `origin/custom`, report that the stable release is already contained
+and no new update is initiated, before creating an update commit/PR,
 releasing, installing, restarting, or deploying. An unfinished invocation whose
 PR already merged resumes at its next unverified stage instead.
 
@@ -231,7 +239,9 @@ gh workflow run bcdn-release.yml --repo donadiosolutions/opencodex --ref custom 
 ```
 
 Capture the returned run URL/ID, then its signed reservation, numbered tag,
-selected source SHA, workflow SHA, and official upstream tag/commit. Do not
+selected source SHA, workflow SHA, and official upstream tag/commit. Require that
+upstream identity to equal the selected stable tag and commit; investigate a
+mismatch before proceeding. Do not
 identify the run by merely taking the newest release. Require the selected
 source to contain the reviewed update and selected upstream commit. If `custom`
 advanced before reservation, inspect and validate the intervening changes under

@@ -1,4 +1,16 @@
 {
+  "responses-websocket-workflow-ceiling.test.ts": "responses",
+  "responses-workflow-send-ceiling.test.ts": "responses",
+  "codex-cli-update-process-fixture.test.ts": "codex-integration",
+  "responses-direct-chat-tool-choice.test.ts": "responses",
+  "chat-native-mistral-content.test.ts": "responses",
+  "claude-endpoint-lifetime.test.ts": "claude-integration",
+  "messaging-mcp-replies.test.ts": "codex-integration",
+  "kiro-tool-byte-accounting.test.ts": "providers/kiro",
+  "openai-chat-mistral-policy.test.ts": "adapters/openai",
+  "mistral-reasoning-efforts.test.ts": "providers",
+  "ws-native-continuation-send-budget.test.ts": "responses",
+
   "hub-entitlement-version.test.ts": "codex-integration",
   "hub-account-entitlement-refresh.test.ts": "codex-integration",
   "agent-task-plaintext-delivery.test.ts": "server",

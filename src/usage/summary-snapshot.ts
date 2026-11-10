@@ -1,3 +1,4 @@
+import { USAGE_APPS, type UsageApp } from "./app-breakdown";
 import type { UsageSummaryTotals, UsageSurface } from "./summary";
 import type { UsageSourceFilter } from "./source-filter";
 import type { UsageTimeWindow } from "./time-range";
@@ -73,6 +74,7 @@ export interface UsagePartition {
   surface: UsagePartitionSurface;
   oldestTimestamp: number | null;
   totals: UsageSummaryTotals;
+  apps: Map<UsageApp, UsageSummaryTotals>;
   models: Map<string, UsageModelAccumulator>;
   providers?: Map<string, UsageModelAccumulator>;
   accounts: Map<string, UsageAccountAccumulator>;
@@ -104,7 +106,9 @@ export interface UsageSummarySnapshot {
   comboOverlap: boolean;
   partitions: UsagePartitionSnapshot[];
 }
-export interface UsagePartitionSnapshot extends Omit<UsagePartition, "models" | "providers" | "accounts" | "modelOverlaps"> {
+export interface UsagePartitionSnapshot extends Omit<UsagePartition, "apps" | "models" | "providers" | "accounts" | "modelOverlaps"> {
+  /** Absent in older v1 rollups, whose app attribution was not retained. */
+  apps?: [UsageApp, UsageSummaryTotals][];
   models: [string, Omit<UsageModelAccumulator, "requestFacts">][];
   providers: [string, Omit<UsageModelAccumulator, "requestFacts">][];
   accounts: [string, Omit<UsageAccountAccumulator, "requestIds">][];
@@ -114,6 +118,7 @@ export interface UsagePartitionSnapshot extends Omit<UsagePartition, "models" | 
 export function encodeUsagePartition(partition: UsagePartition): UsagePartitionSnapshot {
   return structuredClone({
     ...partition,
+    apps: [...partition.apps],
     models: [...partition.models],
     providers: [...partition.providers!],
     accounts: [...partition.accounts],
@@ -127,6 +132,7 @@ export function decodeUsagePartition(partition: UsagePartitionSnapshot, ordinalO
   for (const [, account] of copy.accounts) account.firstSeen += ordinalOffset;
   return {
     ...copy,
+    apps: new Map(copy.apps ?? [["unclassified", { ...copy.totals }]]),
     models: new Map(copy.models), providers: new Map(copy.providers), accounts: new Map(copy.accounts),
     modelOverlaps: new Map(copy.modelOverlaps.map(overlap => [JSON.stringify(overlap.models), overlap])),
   };
@@ -172,7 +178,11 @@ const partition = (value: unknown) => object(value, {
   oldestTimestamp: nullableNumber, totals: value => object(value, totalsRequired, totalsOptional),
   models: value => pairs(value, model), providers: value => pairs(value, model),
   accounts: value => pairs(value, account), modelOverlaps: value => Array.isArray(value) && value.every(overlap),
-}, { legacyUnclassifiedRequests: integer });
+}, {
+  legacyUnclassifiedRequests: integer,
+  apps: value => pairs(value, totals => object(totals, totalsRequired, totalsOptional))
+    && (value as [string, unknown][]).every(([client]) => USAGE_APPS.includes(client as UsageApp)),
+});
 const filterValue = (value: unknown) => value === null || (text(value) && value.trim() === value && value.length > 0);
 const lowerFilterValue = (value: unknown) => filterValue(value) && (value === null || (value as string).toLowerCase() === value);
 export function isUsageSummarySnapshot(value: unknown): value is UsageSummarySnapshot {
