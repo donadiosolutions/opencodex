@@ -32,7 +32,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 100 |
 | [telemetry](01_surface_telemetry.md) | 6 |
-| [access-remote](01_surface_access-remote.md) | 34 |
+| [access-remote](01_surface_access-remote.md) | 35 |
 | [lab](01_surface_lab.md) | 21 |
 
 ## Read-only capabilities
@@ -1472,6 +1472,10 @@ Original invocation order. These headings preserve links to the previous single-
 
 [State-changing task](01_surface_access-remote.md#ocx-access-audio-live-check)
 
+### `ocx link check`
+
+[State-changing task](01_surface_access-remote.md#ocx-link-check)
+
 ### `ocx lab status`
 
 [Read-oriented task](01_surface_lab.md#ocx-lab-status)
@@ -1558,6 +1562,6 @@ Original invocation order. These headings preserve links to the previous single-
 
 ## Counts
 
-- declared capabilities: 377
-- of those, state-changing: 232
+- declared capabilities: 378
+- of those, state-changing: 233
 - head-resolved invocations: 2
