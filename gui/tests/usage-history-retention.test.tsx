@@ -56,7 +56,7 @@ async function mount() {
 function payload(history?: object) {
   return {
     ...(history ? { history } : {}), range: "30d", surface: "all", since: null,
-    sourceFilter: { client: "codex", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
+    sourceFilter: { client: "all", device: { kind: "all" } }, legacyUnclassifiedRequests: 0,
     generatedAt: Date.now(), summary: { requests: 0, measuredRequests: 0, reportedRequests: 0,
       unreportedRequests: 0, unsupportedRequests: 0, estimatedRequests: 0, inputTokens: 0,
       outputTokens: 0, cachedInputTokens: 0, reasoningOutputTokens: 0, totalTokens: 0, coverageRatio: 0 },
