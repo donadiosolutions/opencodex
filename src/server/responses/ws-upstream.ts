@@ -168,7 +168,7 @@ export async function codexWsUpstreamFetch(
   nativeControl?: NativeResponseControl,
   beforeContinuation?: () => Promise<void>,
   incrementalEnabled = false,
-  onPhysicalDispatch?: () => void,
+  onPhysicalDispatch?: (body: BodyInit | null | undefined) => void,
   /** Opt-in pre-output refusal hold (#6969); see codexWsExchange. */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold,
   onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void,
@@ -276,7 +276,7 @@ export async function codexWsUpstreamFetch(
           const fresh = new CodexWsSession(retryDial.url, retryDial.headers, false, undefined, retryDial.proxy);
           if (!fresh.reserve()) { fresh.dispose(); return sseFallback(url, init); }
           return codexWsExchange({ session: fresh, url, init, prepared, sseFallback, onQuota, beforeDispatch,
-            onTransport, observeTransport, nativeControl: control, beforeContinuation, onPhysicalDispatch, onContinuationDispatch, preOutputRefusalHold,
+            onTransport, observeTransport, nativeControl: control, beforeContinuation, onPhysicalDispatch: () => onPhysicalDispatch?.(frameText), onContinuationDispatch, preOutputRefusalHold,
             bunVersion: typeof runtime === "string" ? runtime : runtime.version,
             metadataContext: codexWsMetadataContext(init, prepared.model) });
         };
@@ -289,7 +289,7 @@ export async function codexWsUpstreamFetch(
     session, url, init, prepared: exchangePrepared, sseFallback, onQuota, beforeDispatch,
     onTransport, observeTransport,
     nativeControl: control,
-    beforeContinuation, onPhysicalDispatch, onContinuationDispatch,
+    beforeContinuation, onPhysicalDispatch: () => onPhysicalDispatch?.(exchangePrepared.frameText), onContinuationDispatch,
     continuationFrameText,
     retryFullInput,
     onContinuationDecision: decision,

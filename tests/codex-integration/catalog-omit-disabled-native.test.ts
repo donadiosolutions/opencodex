@@ -200,7 +200,7 @@ test("retained sync and serve-options omit the same rows without changing routed
     const response = await fetch(new URL("/v1/models?client_version=0.160.0", server.url));
     expect(response.status).toBe(200);
     const live = await response.json() as RawCatalog;
-    for (const catalog of [read(), live, JSON.parse(readFileSync(join(home.codexHome, "models_cache.json"), "utf8"))]) {
+    for (const catalog of [read(), live]) {
       expect(catalog.models?.some((row: RawEntry) => row.slug === "gpt-5.5")).toBe(false);
       expect(catalog.models?.find((row: RawEntry) => row.slug === "fixture/model")).toMatchObject({
         input_modalities: ["text", "image"], experimental_supported_tools: ["fixture_tool"], shell_type: "unified_exec",

@@ -319,6 +319,9 @@ fields vary by flow. `flowId`, account identity and device code are different.
 Live OAuth logout returns `{schemaVersion:1, success:true, provider, live:true}`.
 Local logout instead uses `{schemaVersion:1, ok, provider, removed}`, with
 `reason:"not_found"` and exit 4 when absent. Never invent `removed` for live logout.
+A provider whose login serves several rows (`kimi`, `kimi-responses`) adds
+`credentialSlot` and `affectedRows` to both success shapes: the active account
+of that shared login was removed for every listed row.
 
 ## Settings and v2 receipts
 
@@ -411,12 +414,19 @@ not that the Child applied it. `activity.idle` means no relayed model turn for 1
 Home cannot tell. `codex` is null for now. Times are epoch milliseconds except the ISO `observedAt`. The CLI
 drops keys it does not know and reads an unknown enum value as `unknown`.
 
-`ocx link check` prints an `ocx.link.child-job/1` document:
-`{schema, jobId, op:"observe", trigger, restart:"none", state:"queued"|"running"|"done", createdAt, finishedAt, items}`,
-each item `{linkId, alias, state, reason, startedAt, finishedAt}`. Item states are `succeeded`, `busy`,
-`offline`, `refused`, `owner-action`, `unsupported`, `failed` (and, for later operations, `up-to-date` and
-`uncertain`). Reasons are closed tokens such as `legacy-ocx`, `child-initiated`, `ssh-failed`,
-`link-removed` or `link-operation-in-progress`; no remote output is included.
+`ocx link check|update|sync|restart-codex` print an `ocx.link.child-job/1` document:
+`{schema, jobId, op:"observe"|"sync"|"restart-codex"|"update", trigger:"manual"|"auto", restart:"none"|"app-server"|"codex",
+state:"queued"|"running"|"done", createdAt, finishedAt, items}`, each item
+`{linkId, alias, state, reason, hint?, fromVersion?, toVersion?, sync?, restart?, startedAt, finishedAt}`.
+`sync` is `{state:"synced"|"skipped"|"failed"|"timed-out", reason}` for the pinned sync the item ran;
+`restart` is `{requested:"app-server"|"codex", outcome}` with `outcome` `requested` (sent, not confirmed),
+`unsupported` (Windows or `ocx-child`), `not-run` (the sync before it failed) or `skipped` (a relayed request was in
+flight). Item states are `queued` and `running` while the job runs (a `--no-wait` document can carry them), then `succeeded`, `up-to-date`, `busy`, `offline`, `refused`, `owner-action`,
+`unsupported`, `failed` and `uncertain`. Reasons are closed tokens such as `legacy-ocx`, `child-initiated`,
+`ssh-failed`, `link-removed`, `link-operation-in-progress`, `restart-skipped:link-active`,
+`restart-result-unknown`, `post-update-sync-failed`, `rolled-back`, `windows-apply` or `launcher-node-missing`;
+`hint` is operator guidance written by the Home. No remote output is included. The CLI drops keys it does not
+know and keeps an enum value it does not know for display.
 
 ## Maintenance receipts
 
