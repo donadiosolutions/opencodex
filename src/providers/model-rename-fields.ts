@@ -6,6 +6,7 @@ type ModelRenameRole = "none" | "record" | "list" | "scalar" | "nested-models";
 export const PROVIDER_MODEL_RENAME_ROLES = {
   alias: "none",
   modelAliases: "record",
+  aliasTemplate: "none",
   modelDisplayNames: "record",
   defaultAliases: "none",
   adapter: "none",
@@ -135,6 +136,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   foldDeveloperRoleToSystem: "none",
   singleLeadingSystemMessage: "none",
   promptCacheKey: "none",
+  cacheAffinity: "none",
   chatServiceTier: "none",
   responsesItemIdRepair: "none",
   autoToolChoiceOnlyModels: "list",
@@ -152,6 +154,8 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   thinkingBudgetModels: "list",
   escapeBuiltinToolNames: "none",
   anthropicEofTolerance: "none",
+  forwardAdvisorTool: "none",
+  perMessageEffort: "none",
   noVisionModels: "list",
   googleMode: "none",
   googleToolSchemaPolicy: "none",
@@ -162,6 +166,7 @@ export const PROVIDER_MODEL_RENAME_ROLES = {
   unsafeAllowNativeLocalExec: "none",
   nativeLocalExec: "none",
   messagePhaseInference: "none",
+  estimateMissingUsage: "none",
   tlsProfile: "none",
 } as const satisfies Record<keyof OcxProviderConfig, ModelRenameRole>;
 

@@ -36,6 +36,8 @@ import {
   credentialPinnedProviderConfigError,
 } from "../config/provider-validation";
 import { providerDestinationConfigError } from "../lib/destination-policy";
+import { gcpCredentialMarkerAccount, vertexAdcCredentialVerified, vertexConfiguredCredentialKind } from "../lib/gcp-adc";
+import { selectVertexDiscoveryCredential } from "../providers/google-vertex-model-discovery";
 import { providerEgressConfigError } from "../lib/provider-egress";
 import { providerTlsProfileConfigError } from "../lib/provider-tls-profile";
 import { redactSecretString } from "../lib/redact";
@@ -44,6 +46,7 @@ import { effectiveGoogleMode, getProviderRegistryEntry, providerCodexAccountMode
 import { providerConfigSeed } from "../providers/derive";
 import { anthropicOAuthInstanceConfigError } from "../config/schema/anthropic-account-pool";
 import { accountAutoPausePolicySchema } from "../config/schema/account-auto-pause";
+import { normalizeProxyAddress, parseDashboardTrustedProxy } from "../config/dashboard-trusted-proxy";
 import type { OcxConfig, OcxProviderConfig } from "../types";
 import { openRouterRoutingConfigError } from "../providers/openrouter-routing";
 import { modelAutoCompactTokenLimitsConfigError } from "../providers/auto-compact-budget";
@@ -66,6 +69,59 @@ export function markTrustedHubManagementRequest(req: Request): void {
 
 export function inheritTrustedHubManagementRequest(source: Request, target: Request): void {
   if (trustedHubManagementRequests.has(source)) trustedHubManagementRequests.add(target);
+  const peer = dashboardProxyPeers.get(source);
+  if (peer !== undefined) dashboardProxyPeers.set(target, peer);
+}
+
+// #8338: the kernel-observed peer of a public-listener request, recorded by the serve layer the
+// same way as the hub mark above. No header can create or change it.
+const dashboardProxyPeers = new WeakMap<Request, string>();
+
+export function markDashboardProxyPeer(req: Request, address: string | undefined): void {
+  const normalized = address ? normalizeProxyAddress(address) : null;
+  if (normalized) dashboardProxyPeers.set(req, normalized);
+}
+
+/** One forwarded value: undefined when absent, null when empty or a multi-hop list. */
+function singleForwardedValue(req: Request, name: string): string | null | undefined {
+  const value = req.headers.get(name);
+  if (value === null) return undefined;
+  const trimmed = value.trim();
+  return trimmed && !trimmed.includes(",") ? trimmed : null;
+}
+
+function forwardedAuthorityHost(value: string): string | null {
+  try {
+    const url = new URL(`https://${value}`);
+    return url.username || url.password || url.pathname !== "/" || url.search || url.hash ? null : url.host;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The configured dashboard origin when, and only when, the configured proxy delivered this request
+ * (#8338). The peer must be one of `proxyAddresses`; the browser host comes from Host, or from
+ * X-Forwarded-Host when that header is trusted; X-Forwarded-Proto must say https when trusted. A
+ * forwarded host or scheme that contradicts the configured origin refuses even when that header is
+ * not trusted, so a forged value can never pass silently. Standalone with remote auth only: a
+ * loopback bind must never hand local trust to whatever the proxy forwards.
+ */
+export function dashboardProxyOrigin(req: Request, config: OcxConfig): string | null {
+  if (config.dashboardTrustedProxy === undefined) return null;
+  const peer = dashboardProxyPeers.get(req);
+  if (peer === undefined) return null;
+  if ((config.runtimeRole ?? "standalone") !== "standalone" || !isApiAuthRequired(config)) return null;
+  const settings = parseDashboardTrustedProxy(config.dashboardTrustedProxy);
+  if (typeof settings === "string" || !settings.addresses.has(peer)) return null;
+  const forwardedHost = singleForwardedValue(req, "X-Forwarded-Host");
+  const forwardedProto = singleForwardedValue(req, "X-Forwarded-Proto");
+  if (forwardedHost === null || forwardedProto === null) return null;
+  if (forwardedHost !== undefined && forwardedAuthorityHost(forwardedHost) !== settings.host) return null;
+  if (forwardedProto !== undefined && forwardedProto.toLowerCase() !== "https") return null;
+  if (settings.trust.has("x-forwarded-proto") && forwardedProto === undefined) return null;
+  const authority = settings.trust.has("x-forwarded-host") ? forwardedHost : req.headers.get("Host");
+  return authority && forwardedAuthorityHost(authority) === settings.host ? settings.origin : null;
 }
 
 export function setCorsOrigin(port: number): void { _corsOrigin = `http://localhost:${port}`; }
@@ -153,6 +209,9 @@ function comparableOrigin(value: string): string | null {
 }
 
 export function managementRequestOrigin(req: Request, config: OcxConfig): string | null {
+  // #8338: a request the configured dashboard proxy delivered speaks for the configured origin.
+  const proxied = dashboardProxyOrigin(req, config);
+  if (proxied) return proxied;
   const host = req.headers.get("Host");
   const parsedHost = parseHttpHost(host);
   if (!host || !parsedHost) return null;
@@ -496,6 +555,28 @@ export function contextPrincipalIdOf(admission: DataPlaneAdmission | undefined):
 }
 
 /**
+ * Recheck a content-free loopback identity after its local-only header was discarded.
+ * This only revokes retained replay identity; it never grants data-plane admission.
+ */
+export function isContextPrincipalCurrent(principal: string | undefined, config: Pick<OcxConfig, "apiKeys">): boolean {
+  if (!principal) return false;
+  const environment = configuredApiAuthToken(config);
+  if (environment && mintContextPrincipal("environment", "", environment) === principal) return true;
+  const matches = (keyId: string, secret: string): boolean => {
+    if (!secret || mintContextPrincipal("configured", keyId, secret) !== principal) return false;
+    // Preserve the resolver's precedence if an environment token or another key
+    // now shadows this entry. The same key id with a replacement secret is not this owner.
+    return contextPrincipalIdOf(resolveDataPlaneAdmissionSecret(secret, config) ?? undefined) === principal;
+  };
+  for (const key of config.apiKeys ?? []) {
+    if (matches(key.id, key.key)) return true;
+    const pending = key.pendingRotation;
+    if (pending && Date.parse(pending.expiresAt) > Date.now() && matches(key.id, pending.key)) return true;
+  }
+  return false;
+}
+
+/**
  * The caller principal for a context-relay request, which is a stricter question than admission.
  *
  * The default bind is loopback, where admission deliberately never reads a token, so an admitted
@@ -518,6 +599,22 @@ export function resolveContextPrincipal(req: Request, config: OcxConfig, admissi
     const principal = contextPrincipalIdOf(resolved ?? undefined);
     if (principal) return principal;
   }
+  return undefined;
+}
+
+/** Preserve only loopback replay identity removed by the forwarding-header filter. */
+export function resolveFilteredReplayPrincipal(
+  req: Request,
+  config: OcxConfig,
+  admission: DataPlaneAdmission,
+  forwardHeaders: Headers,
+): Readonly<{ clientPrincipalId: string }> | undefined {
+  if (admission.kind !== "loopback"
+    || !(req.headers.has("x-opencodex-api-key") || req.headers.has("x-api-key"))) return undefined;
+  const principal = resolveContextPrincipal(req, config, admission);
+  const forwardedPrincipal = resolveContextPrincipal(new Request(req.url, { headers: forwardHeaders }), config, admission);
+  // A surviving bearer keeps its existing per-frame resolution and key-rotation semantics.
+  if (principal && principal !== forwardedPrincipal) return Object.freeze({ clientPrincipalId: principal });
   return undefined;
 }
 
@@ -1080,6 +1177,7 @@ type ProviderConfigFieldPolicy = "editor" | "redacted" | "runtime";
 const PROVIDER_CONFIG_FIELD_POLICY = {
   alias: "editor",
   modelAliases: "editor",
+  aliasTemplate: "editor",
   modelDisplayNames: "editor",
   defaultAliases: "editor",
   adapter: "editor",
@@ -1216,6 +1314,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   foldDeveloperRoleToSystem: "editor",
   singleLeadingSystemMessage: "editor",
   promptCacheKey: "editor",
+  cacheAffinity: "editor",
   chatServiceTier: "editor",
   responsesItemIdRepair: "editor",
   autoToolChoiceOnlyModels: "editor",
@@ -1233,6 +1332,8 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   thinkingBudgetModels: "editor",
   escapeBuiltinToolNames: "editor",
   anthropicEofTolerance: "editor",
+  forwardAdvisorTool: "editor",
+  perMessageEffort: "editor",
   noVisionModels: "editor",
   googleMode: "editor",
   project: "editor",
@@ -1242,6 +1343,7 @@ const PROVIDER_CONFIG_FIELD_POLICY = {
   unsafeAllowNativeLocalExec: "editor",
   nativeLocalExec: "editor",
   messagePhaseInference: "editor",
+  estimateMissingUsage: "editor",
   tlsProfile: "editor",
 } as const satisfies Record<keyof OcxProviderConfig, ProviderConfigFieldPolicy>;
 
@@ -1380,9 +1482,15 @@ export function safeConfigDTO(config: OcxConfig): unknown {
         && providerMatchesRegistryTransport(name, provider));
     if (vertex) {
       const key = provider.apiKey;
-      dto.vertexCredentialKind = key?.startsWith("gcp-sa:") ? "marker"
-        : !key?.trim() || key === "N/A" || key.startsWith("<") ? "ambient"
-          : key.startsWith("keychain:") || /^\$\{?\w+\}?$/.test(key) ? "reference" : "api-key";
+      dto.vertexCredentialKind = vertexConfiguredCredentialKind(key);
+      if (dto.vertexCredentialKind === "ambient" || dto.vertexCredentialKind === "marker") {
+        // Proof is reported only for the credential inference selects: an ambient row with
+        // GOOGLE_CLOUD_API_KEY set sends that key, so an ADC token says nothing about it.
+        try {
+          const selection = selectVertexDiscoveryCredential(provider);
+          if (selection.kind === "adc") dto.vertexCredentialVerified = vertexAdcCredentialVerified(gcpCredentialMarkerAccount(selection.marker));
+        } catch { dto.vertexCredentialVerified = false; }
+      }
     }
     if (name === "xai") {
       dto.xaiResponsesOptInState = xaiResponsesOptInState(provider);

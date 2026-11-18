@@ -9,6 +9,8 @@ import { isRec } from "../../claude/inbound-records";
 import { isOpenCodeGoResponsesUrl } from "../../adapters/opencode-go-additional-tools";
 import { buildResponsesTransport } from "../../adapters/openai-responses/transport";
 import { anthropicBillingPhysicalFetch } from "../../providers/anthropic-billing-ownership";
+import { passiveKeyPhysicalFetch } from "../../providers/passive-key-observation";
+import { inheritPassiveKeyProof } from "../../lib/passive-key-fetch-proof";
 import { rebindPhysicalSend } from "../../lib/request-execution-budget";
 import { anthropicModelQuotaFor } from "../../oauth/anthropic-model-quota";
 import { anthropicRatePolicyFor } from "../../oauth/anthropic-rate-limit-policy";
@@ -35,6 +37,7 @@ import type { AnthropicAccountSelectionReason } from "../../oauth/anthropic-rout
 import { resolveAnthropicModelRouteForInstance, routeCandidates, type AnthropicRouteDecision } from "../../oauth/anthropic-model-routes";
 import {
   anthropicRoutingFor,
+  ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST,
   AnthropicAccountCooldownError,
   formatAnthropicProviderForLog,
 } from "../../oauth/anthropic-routing";
@@ -82,6 +85,7 @@ import {
 import { renameRoutedIdentityInContext } from "../../adapters/identity";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import {
+  providerAffinityGenerationIsCurrent,
   providerApiKeySelectionIsCurrent,
   resolveCurrentProviderApiKeyTransport,
 } from "../../providers/api-key-selection";
@@ -97,7 +101,7 @@ import { recordAnthropicAccountQuotaFromHeadersForInstance, hasPassiveAccountQuo
 import { checkOutboundBodySize, describeOutboundBodyRefusal } from "./outbound-body-guard";
 import { formatErrorResponse } from "../../bridge";
 import { bindRouteReasoningReplayScope } from "./core-replay";
-import { assignNativeLogConversationId, sessionIdHeaderFromRequest, normalizeLogConversationId } from "../request-log-conversation";
+import { affinityLaneFromRequest, assignNativeLogConversationId, normalizeLogConversationId, sessionIdHeaderFromRequest } from "../request-log-conversation";
 import { redactSecretString } from "../../lib/redact";
 import { captureAccountAutoPauseAttempt } from "../../oauth/account-auto-pause";
 import { selectProactiveApiKeyTransport } from "../../providers/key-failover";
@@ -803,6 +807,7 @@ export async function prepareResponsesTransport(
         throw new Error("OAuth account selection changed before dispatch");
       }
     } else {
+      if (!providerAffinityGenerationIsCurrent(config, route.providerName, route.provider)) throw new Error("Provider affinity selection is no longer available");
       let current = resolveCurrentProviderApiKeyTransport(config, route.providerName, route.provider);
       if (!current && (route.provider._apiKeyAttempt?.distributed || (route.provider.requestPacing?.enabled
         && (route.provider.requestPacing.keys || route.provider.requestPacing.keySelection === "round-robin")))) {
@@ -889,7 +894,7 @@ export async function prepareResponsesTransport(
         const beforePhysicalSend = (): void => {
           incoming.abortSignal?.throwIfAborted();
           if (sent) {
-            if (binding?.kind === "api-key" && binding.provider._apiKeyAttempt?.distributed
+            if (binding?.kind === "api-key" && (binding.provider._apiKeyAttempt?.distributed || binding.provider._apiKeyAttempt?.cacheAffinity)
               && !selectionIsCurrent(binding)) throw new Error("API key became unavailable during the turn");
             return;
           }
@@ -973,6 +978,7 @@ export async function prepareResponsesTransport(
           if (isEgressTransparentExecutor(selectedFetch)) {
             physicalFetch = markEgressTransparentExecutor(physicalFetch);
           }
+          inheritPassiveKeyProof(physicalFetch, selectedFetch);
           // The binding travels with the send, so a rebuilt request resolves its provider route
           // against the destination it is actually going to rather than the one this dispatch
           // started with. Account reselection can move the upstream host, which would otherwise
@@ -1003,7 +1009,7 @@ export async function prepareResponsesTransport(
             // WS eligibility (egress, pacing, URL) was checked for the provider it was built for; a
             // provider reselected above was not, so it takes the HTTP fallback under its own route.
             const dispatchFetch = ((input, physicalInit) => ws?.provider === route.provider ? execute(input, physicalInit) : sendWithConnectionPolicy(
-              distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(physicalFetch, route.providerName, route.provider), route.providerName, route.provider, target),
+              passiveKeyPhysicalFetch(distributedKeyPhysicalFetch(anthropicBillingPhysicalFetch(physicalFetch, route.providerName, route.provider), route.providerName, route.provider, target), config, route.providerName, route.provider),
               input,
               { ...physicalInit, redirect: "manual",
                 ...physicalSendObserverInit(observeAutoPause, destination instanceof Request ? destination.url : String(destination), deferredCopilotNote ? commitKeyAttemptSend : undefined),
@@ -1319,6 +1325,8 @@ export async function prepareResponsesTransport(
   // The Transport variant, not the bare picker: the picker answers with the PERSISTED row, and
   // a built-in provider stored in its valid minimal form would lose the adapter id, base URL
   // and static headers registry backfill supplies, throwing `Unknown adapter: undefined`.
+  const affinityLane = affinityLaneFromRequest(req, logCtx, config, options.admission, options.replayPrincipal);
+  if (affinityLane) logCtx.affinityLane = affinityLane;
   let proactiveKeyProvider: OcxProviderConfig | null;
   try {
     proactiveKeyProvider = selectProactiveApiKeyTransport(
@@ -1326,6 +1334,8 @@ export async function prepareResponsesTransport(
       route.providerName,
       route.provider,
       parsed.options.promptCacheKey,
+      Date.now(),
+      { lane: affinityLane, model: route.modelId, log: logCtx, continuation: parsed.context.messages.at(-1)?.role === "toolResult" },
     );
   } catch (err) {
     if (err instanceof OAuthAccountPausedError) {
@@ -1444,10 +1454,17 @@ export async function prepareResponsesTransport(
   ]).size : 0;
   const fundedAccounts = Math.min(genericRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
   const genericFailoverLimit = Math.max(GENERIC_OAUTH_MAX_FAILOVERS_PER_REQUEST, fundedAccounts - 1);
-  if (fundingAccountId) expandInferenceOAuthSendBudget(options.sendBudget, fundedAccounts);
+  const anthropicRosterSize = anthropicRouting && anthropicPoolAccountId ? new Set([
+    anthropicPoolAccountId,
+    ...anthropicRouting.getEligibleAnthropicAccounts(Date.now(), route.modelId),
+  ]).size : 0;
+  const anthropicFundedAccounts = Math.min(anthropicRosterSize, GENERIC_OAUTH_MAX_ACCOUNTS_PER_REQUEST);
+  const anthropicFailoverLimit = Math.max(ANTHROPIC_POOL_MAX_FAILOVERS_PER_REQUEST, anthropicFundedAccounts - 1);
+  if (fundingAccountId || anthropicPoolAccountId)
+    expandInferenceOAuthSendBudget(options.sendBudget, Math.max(fundedAccounts, anthropicFundedAccounts));
 
   return {
-    genericFailoverLimit,
+    genericFailoverLimit, anthropicFailoverLimit,
     isOAuth401ReplayProvider,
     get sentOAuthSnapshot(): OAuthAccessSnapshot | undefined {
       return sentOAuthSnapshot;

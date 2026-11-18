@@ -3,6 +3,7 @@ import type { OcxProviderContinuationState } from "../../types";
 import type { ResidentInput, ResidentResponseState } from "../state";
 import { isBodyNonPersistable, markBodyNonPersistable } from "./body-policy";
 import { hasPendingClientToolCall } from "./unforced-store-false";
+import type { replayScopeMatches as ReplayScopeMatches, validReplayOwnerKey as ValidReplayOwnerKey } from "./replay-owner";
 
 const EPHEMERAL_RESPONSE_TTL_MS = 15 * 60 * 1_000;
 const MAX_EPHEMERAL_RESPONSES = 128;
@@ -31,6 +32,8 @@ export type RememberResponseStateOptions = {
   clientThreadId?: string;
   ephemeral?: boolean;
   ephemeralScope?: string;
+  replayOwnerKey?: string | null;
+  compiledPlaintext?: boolean;
 };
 
 export interface EphemeralReplayStore {
@@ -41,6 +44,9 @@ export interface EphemeralReplayStore {
   measureResidentEntry: (id: string, entry: ResidentInput) => ResidentResponseState | null;
   setResidentEntry: (id: string, entry: ResidentInput) => void;
   schedulePersist: () => void;
+  canReplace: (id: string, thread: string | undefined, owner: string | null | undefined) => boolean;
+  validReplayOwnerKey: typeof ValidReplayOwnerKey;
+  replayScopeMatches: typeof ReplayScopeMatches;
 }
 
 let store: EphemeralReplayStore | null = null;
@@ -90,6 +96,8 @@ function pruneEphemeralResponses(at = requireStore().now()): void {
 export function resolveEphemeralReplay(
   responseId: string,
   ephemeralScope?: string,
+  clientThreadId?: string,
+  replayOwnerKey?: string | null,
 ): EphemeralReplayResolution {
   pruneEphemeralResponses();
   const scope = typeof ephemeralScope === "string" && ephemeralScope.trim().length > 0
@@ -102,6 +110,9 @@ export function resolveEphemeralReplay(
     return [...ephemeralStates.values()].some(state => state.responseId === responseId)
       ? { kind: "scope_mismatch" }
       : { kind: "miss" };
+  }
+  if (!requireStore().replayScopeMatches(ephemeral, clientThreadId, replayOwnerKey)) {
+    return { kind: "scope_mismatch" };
   }
   const { responseId: _responseId, expiresAt, ...state } = ephemeral;
   return {
@@ -126,6 +137,8 @@ function rememberEphemeralResponseState(
   response: ResponsePayload,
   clientThreadId?: string,
   ephemeralScope?: string,
+  replayOwnerKey?: string | null,
+  compiledPlaintext?: boolean,
 ): void {
   if (!ephemeralScope || ephemeralScope.trim().length === 0) return;
   if (typeof response.id !== "string" || !Array.isArray(response.output)) return;
@@ -135,6 +148,13 @@ function rememberEphemeralResponseState(
       || (details as { reason?: unknown }).reason !== "max_output_tokens") return;
   } else if (response.status !== undefined && response.status !== "completed") return;
   const bound = requireStore();
+  if ((compiledPlaintext && !bound.validReplayOwnerKey(replayOwnerKey))
+    || replayOwnerKey === null
+    || (replayOwnerKey !== undefined && !bound.validReplayOwnerKey(replayOwnerKey))) return;
+  const clientThread = bound.normalizedClientThreadId(clientThreadId);
+  const key = ephemeralResponseKey(ephemeralScope, response.id);
+  const previous = ephemeralStates.get(key);
+  if (previous && !bound.replayScopeMatches(previous, clientThread, replayOwnerKey)) return;
   const createdAt = bound.now();
   const expiresAt = ephemeralBodyExpiry.get(request) ?? createdAt + EPHEMERAL_RESPONSE_TTL_MS;
   if (expiresAt <= createdAt) return;
@@ -146,16 +166,14 @@ function rememberEphemeralResponseState(
   } catch {
     return;
   }
-  const clientThread = bound.normalizedClientThreadId(clientThreadId);
   const candidate = bound.measureResidentEntry(response.id, {
     createdAt,
     ...(clientThread ? { clientThreadId: clientThread } : {}),
+    ...(replayOwnerKey ? { replayOwnerKey } : {}),
     items: [...requestItems, ...output],
     providerOutputStart: requestItems.length,
   });
   if (!candidate || candidate.sizeBytes > MAX_EPHEMERAL_RESPONSE_BYTES) return;
-  const key = ephemeralResponseKey(ephemeralScope, response.id);
-  const previous = ephemeralStates.get(key);
   if (previous) ephemeralResponseBytes -= previous.sizeBytes;
   ephemeralStates.delete(key);
   ephemeralStates.set(key, { ...candidate, responseId: response.id, expiresAt });
@@ -177,7 +195,9 @@ export function rememberResponseState(
   const request = requestBody as Record<string, unknown>;
   if (isBodyNonPersistable(request)) {
     if (opts?.ephemeral) {
-      rememberEphemeralResponseState(request, response, opts.clientThreadId, opts.ephemeralScope);
+      rememberEphemeralResponseState(
+        request, response, opts.clientThreadId, opts.ephemeralScope, opts.replayOwnerKey, opts.compiledPlaintext,
+      );
     }
     return;
   }
@@ -193,6 +213,10 @@ export function rememberResponseState(
   if (unforcedStoreFalse && !(opts?.retainForToolContinuation === true && hasPendingClientToolCall(response.output))) return;
   const bound = requireStore();
   bound.ensureLoaded();
+  if ((opts?.compiledPlaintext && !bound.validReplayOwnerKey(opts.replayOwnerKey))
+    || opts?.replayOwnerKey === null
+    || (opts?.replayOwnerKey !== undefined && !bound.validReplayOwnerKey(opts.replayOwnerKey))) return;
+  if (!bound.canReplace(response.id, opts?.clientThreadId, opts?.replayOwnerKey)) return;
   const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
     ? { cursor: { conversationId: providerState } }
     : structuredClone(providerState ?? {});
@@ -206,6 +230,7 @@ export function rememberResponseState(
   bound.setResidentEntry(response.id, {
     createdAt: bound.now(),
     ...(clientThreadId ? { clientThreadId } : {}),
+    ...(opts?.replayOwnerKey ? { replayOwnerKey: opts.replayOwnerKey } : {}),
     items: [...requestItems, ...response.output],
     providerOutputStart: requestItems.length,
     ...(Object.keys(normalizedProviderState).length > 0 ? { providers: normalizedProviderState } : {}),

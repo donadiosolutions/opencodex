@@ -464,7 +464,7 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
       const expanded = expandPreviousResponseInput({
         previous_response_id: "resp_ephemeral",
         input: [{ type: "function_call_output", call_id: "call_1", output: "done" }],
-      }, undefined, "scope-a") as { input: unknown[] };
+      }, undefined, undefined, "scope-a") as { input: unknown[] };
       expect(expanded.input[0]).toMatchObject({
         type: "message", role: "user", content: "EPHEMERAL-PLAINTEXT-SENTINEL",
       });
@@ -479,14 +479,14 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
         undefined,
         { force: true, ephemeral: true, ephemeralScope: "scope-a" },
       );
-      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_child" }, undefined, "scope-a") as {
+      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_child" }, undefined, undefined, "scope-a") as {
         input?: unknown[];
       }).input).toHaveLength(4);
 
       const carried = expandPreviousResponseInput({
         previous_response_id: "resp_ephemeral",
         input: expanded.input.slice(0, 2),
-      }, undefined, "scope-a") as { input: unknown[] };
+      }, undefined, undefined, "scope-a") as { input: unknown[] };
       expect(carried.input).toHaveLength(2);
       rememberResponseState(
         carried,
@@ -494,7 +494,7 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
         undefined,
         { ephemeral: true, ephemeralScope: "scope-a" },
       );
-      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_carried" }, undefined, "scope-a") as {
+      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_carried" }, undefined, undefined, "scope-a") as {
         input?: unknown[];
       }).input).toBeDefined();
 
@@ -506,7 +506,7 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
         undefined,
         { ephemeral: true, ephemeralScope: "scope-a" },
       );
-      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_clone" }, undefined, "scope-a") as {
+      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_clone" }, undefined, undefined, "scope-a") as {
         input?: unknown[];
       }).input).toBeDefined();
 
@@ -537,7 +537,7 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
           { ephemeral: true, ephemeralScope: "scope-a" },
         );
         clock += 14 * 60 * 1_000;
-        const expanded = expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_root" }, undefined, "scope-a") as {
+        const expanded = expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_root" }, undefined, undefined, "scope-a") as {
           input?: unknown[];
         };
         expect(expanded.input).toBeDefined();
@@ -548,10 +548,10 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
           { ephemeral: true, ephemeralScope: "scope-a" },
         );
         clock += 61 * 1_000;
-        expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_root" }, undefined, "scope-a") as {
+        expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_root" }, undefined, undefined, "scope-a") as {
           input?: unknown[];
         }).input).toBeUndefined();
-        expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_descendant" }, undefined, "scope-a") as {
+        expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_descendant" }, undefined, undefined, "scope-a") as {
           input?: unknown[];
         }).input).toBeUndefined();
       } finally {
@@ -573,17 +573,17 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
       expect((expandPreviousResponseInput(
         { previous_response_id: "resp_ephemeral_count_0" },
         "task-a",
-        "scope-a",
+        undefined, "scope-a",
       ) as { input?: unknown[] }).input).toBeUndefined();
       expect((expandPreviousResponseInput(
         { previous_response_id: "resp_ephemeral_count_128" },
         "task-b",
-        "scope-a",
+        undefined, "scope-a",
       ) as { input?: unknown[] }).input).toBeUndefined();
       expect((expandPreviousResponseInput(
         { previous_response_id: "resp_ephemeral_count_128" },
         "task-a",
-        "scope-a",
+        undefined, "scope-a",
       ) as { input?: unknown[] }).input).toBeDefined();
     });
 
@@ -600,7 +600,7 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
       }
       const replay = (scope?: string) => {
         const request = { previous_response_id: "resp_shared_ephemeral" };
-        const result = expandPreviousResponseInput(request, "task-shared", scope) as { input?: unknown[] };
+        const result = expandPreviousResponseInput(request, "task-shared", undefined, scope) as { input?: unknown[] };
         return { request, result, failure: previousResponseReplayFailure(result) };
       };
       expect(JSON.stringify(replay("scope-a").result)).toContain("secret-a");
@@ -624,18 +624,18 @@ describe("Responses state admission boundary (oversized direct-spill)", () => {
       rememberEphemeral("resp_ephemeral_small", "small");
       rememberEphemeral("resp_ephemeral_bytes_1", "a".repeat(5 * 1024 * 1024));
       rememberEphemeral("resp_ephemeral_bytes_2", "b".repeat(5 * 1024 * 1024));
-      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_bytes_1" }, undefined, "scope-a") as {
+      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_bytes_1" }, undefined, undefined, "scope-a") as {
         input?: unknown[];
       }).input).toBeUndefined();
-      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_bytes_2" }, undefined, "scope-a") as {
+      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_bytes_2" }, undefined, undefined, "scope-a") as {
         input?: unknown[];
       }).input).toBeDefined();
 
       rememberEphemeral("resp_ephemeral_oversized", "z".repeat(9 * 1024 * 1024));
-      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_oversized" }, undefined, "scope-a") as {
+      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_oversized" }, undefined, undefined, "scope-a") as {
         input?: unknown[];
       }).input).toBeUndefined();
-      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_bytes_2" }, undefined, "scope-a") as {
+      expect((expandPreviousResponseInput({ previous_response_id: "resp_ephemeral_bytes_2" }, undefined, undefined, "scope-a") as {
         input?: unknown[];
       }).input).toBeDefined();
     });
