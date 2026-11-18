@@ -106,6 +106,23 @@ async function readReservation(github, repo, ref) {
       ref.ref !== `refs/tags/${value.release_tag}`)) throw new Error('Reservation tag binding mismatch');
   return value;
 }
+async function createReservationTag(github, repo, value) {
+  const tag = { ...repo, tag: value.release_tag, message: signedReservation(value),
+    object: value.source_sha, type: 'commit' };
+  // Signing can outlive the idle HTTP connection. Retrying the same unreferenced
+  // tag object cannot publish a ref or allocate another release number.
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return (await github.rest.git.createTag(tag)).data;
+    } catch (error) {
+      const socketClosed = !error.response && error.cause?.cause?.code === 'UND_ERR_SOCKET';
+      if (!socketClosed || attempt === 3) {
+        throw new Error(`Could not create the signed reservation tag object (HTTP ${Number(error.status) || 'unknown'})`);
+      }
+      await new Promise(resolve => setTimeout(resolve, attempt * 500));
+    }
+  }
+}
 function upstreamIdentity(repo, sha) {
   const directory = mkdtempSync(join(tmpdir(), 'fork-upstream-'));
   const git = (...args) => execFileSync('git', ['-C', directory, ...args], {
@@ -177,8 +194,7 @@ async function reserve({ github, context, core }) {
       const release_tag = nextTag(identity.upstream_tag, names);
       value = { schema: 1, repository: `${repo.owner}/${repo.repo}`, run_id: runId,
         source_branch, source_sha, ...identity, workflow_sha: context.sha, release_tag };
-      const { data: tag } = await github.rest.git.createTag({ ...repo, tag: release_tag,
-        message: signedReservation(value), object: source_sha, type: 'commit' });
+      const tag = await createReservationTag(github, repo, value);
       try {
         await github.rest.git.createRef({ ...repo, ref: `refs/tags/${release_tag}`, sha: tag.sha });
         break;
