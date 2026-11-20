@@ -255,7 +255,7 @@ describe("xAI OAuth Responses opt-in upstream 401 replay", () => {
       expect(attempts?.map(attempt => ({ status: attempt.status, sendCount: attempt.sendCount, credentialSource: attempt.credentialSource })))
         .toEqual([{ status: 401, sendCount: 1, credentialSource: "grok-oauth" },
           { status: 200, sendCount: 1, credentialSource: "grok-oauth" }]);
-      expect(attempts?.[0].totalTokens).toBe(5);
+      expect(attempts?.[0].totalTokens).toBeUndefined();
       expect(attempts?.[1].totalTokens).toBe(5);
       expect(attempts?.[1].recoveryKinds).toContain("oauth-401");
       expect(attempts?.[0].sends?.map(send => send.httpStatus ?? send.status)).toEqual([401]);
