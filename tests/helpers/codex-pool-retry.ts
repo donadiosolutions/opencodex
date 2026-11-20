@@ -83,6 +83,7 @@ export function createPoolRetryHarness(context: {
       combos?: OcxConfig["combos"];
       modelRosterByAccount?: Record<string, string[]>;
       ownedNativeMain?: boolean;
+      transientRetryAttempts?: number;
     } = {},
   ): Promise<PoolRetryHarness> {
     await removeTestDirBestEffort(TEST_DIR);
@@ -132,6 +133,9 @@ export function createPoolRetryHarness(context: {
         openai: {
           ...canonicalDirect,
           codexAccountMode: options.accountMode ?? "pool",
+          ...(options.transientRetryAttempts === undefined ? {} : {
+            transientRetryOn5xx: { attempts: options.transientRetryAttempts },
+          }),
           ...(options.noVisionModels ? { noVisionModels: options.noVisionModels } : {}),
           ...(options.forwardApiKey ? { apiKey: options.forwardApiKey } : {}),
         },

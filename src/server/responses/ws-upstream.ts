@@ -1,3 +1,4 @@
+import { codexWsIncrementalHasRetainedState, codexWsIncrementalUploadEnabled, prepareIncrementalFrame } from "./codex-ws-incremental";
 import { OPENAI_API_RESPONSES_URL } from "./native-response-control";
 import { isInjectionRequest } from "./native-injection-protocol";
 import type { NativeResponseControl } from "./native-response-control";
@@ -18,6 +19,7 @@ import type { NativeResponseControl } from "./native-response-control";
 import { codexWsReuseAcrossTurnsEnabled } from "../../config/codex-ws-reuse-setting";
 import { compareBunVersions } from "../../lib/bun-stream-caps";
 import { resolveProxyRoute, socks5ProxyFromEnv } from "../../lib/proxy-env";
+import { estimateTokens } from "../../lib/token-estimate";
 import type { CodexWsQuotaObserver } from "./codex-ws-metadata";
 import { CODEX_RESPONSES_HTTP_URL, CODEX_RESPONSES_WS_URL, CODEX_WS_FRAME_HEADERS, prepareCodexHttpInit, prepareCodexWsRequest } from "./codex-ws-request";
 import { codexWsExchange } from "./codex-ws-exchange";
@@ -110,6 +112,7 @@ export function planCodexWsDial(
     else if (Object.hasOwn(headers, name)) dialHeaders[name] = headers[name]!;
     else delete dialHeaders[name];
   }
+  if (reuseAcrossTurns && codexWsIncrementalUploadEnabled()) delete dialHeaders["x-client-request-id"];
   const dial = { ...rewritten, headers: dialHeaders };
   if (dial.url === wsUrl || isLoopbackUrl(dial.url)) return dial;
   let destination: URL;
@@ -172,6 +175,11 @@ export async function codexWsUpstreamFetch(
   /** Opt-in pre-output refusal hold (#6969); see codexWsExchange. */
   preOutputRefusalHold?: CodexWsPreOutputRefusalHold,
   onContinuationDispatch?: (frame: { body: Record<string, unknown>; text: string }) => void,
+  explicitProxy?: string,
+  /** Trusted admitted caller (codexWsCallerKey); scopes pooled sockets and incremental prefixes. */
+  caller?: string,
+  recoverPhysicalSend?: (send: () => Promise<void>, estimatedInputTokens: number) => Promise<boolean>,
+  providerName?: string,
 ): Promise<Response> {
   const prepared = prepareCodexWsRequest(url, init);
   if (!prepared) return sseFallback(url, prepareCodexHttpInit(url, init));
@@ -202,12 +210,18 @@ export async function codexWsUpstreamFetch(
   // streaming Response, so the oversized close can only be surfaced as a stream
   // error — and a resend at that point could double-generate. Measuring the
   // frame we are about to send keeps the whole failure mode unreachable.
-  if (codexWsCreateFrameExceedsLimit(frameText)) {
+  // An oversized frame dials only when some socket already holds an acknowledged prefix that
+  // could turn it into a delta; a cold oversized create goes straight to SSE.
+  // Without an admitted caller there is no prefix this request may inherit or seed.
+  const configuredIncremental = codexWsIncrementalUploadEnabled();
+  const incrementalEligible = configuredIncremental && prepared.canonical && !control && caller !== undefined;
+  const legacyIncremental = incrementalEnabled && !configuredIncremental;
+  if ((!incrementalEligible || !codexWsIncrementalHasRetainedState()) && codexWsCreateFrameExceedsLimit(frameText)) {
     return sseFallback(url, init);
   }
 
   const wsUrl = wsUpstreamUrlFor(url);
-  const proxyRoute = resolveProxyRoute(new URL(wsUrl));
+  const proxyRoute = explicitProxy ? { kind: "proxy" as const, proxy: explicitProxy } : resolveProxyRoute(new URL(wsUrl));
   if (proxyRoute.kind === "fallback") return sseFallback(url, init);
   const proxy = proxyRoute.kind === "proxy" ? proxyRoute.proxy : undefined;
   // A genuine caller `originator` is already in these headers via the forward
@@ -236,12 +250,13 @@ export async function codexWsUpstreamFetch(
     // headers and its proxy are all part of the reuse identity, so a pooled socket is never
     // reused for a different destination or with stale plugin headers.
     const dial = planCodexWsDial(wsUrl, headers, proxy);
-    if (!dial) return sseFallback(url, init);
+    if (!dial || (explicitProxy && (dial.url !== wsUrl || dial.proxy !== explicitProxy))) return sseFallback(url, init);
     // The final dial headers, after plugin rewrites, are what the WebSocket upstream receives; the
     // per-turn headers planning drops from the upgrade still reach it inside the frame metadata.
     outboundCredentials().remember(headers);
     outboundCredentials().remember(dial.headers);
-    const identity = control && control.kind !== "steering" ? null : codexWsReuseIdentity(url, dial.headers, frameText, dial.proxy, dial.url, prepared.frameTurnMetadata);
+    const identity = control && (configuredIncremental || control.kind !== "steering") ? null
+      : codexWsReuseIdentity(url, dial.headers, frameText, dial.proxy, dial.url, caller, providerName, prepared.frameTurnMetadata);
     const reuseAcrossTurns = identity !== null && codexWsReuseAcrossTurnsEnabled();
     const pooled = identity
       ? reuseAcrossTurns
@@ -256,7 +271,7 @@ export async function codexWsUpstreamFetch(
       session.dispose();
       return sseFallback(url, init);
     }
-    if (incrementalEnabled && prepared.canonical && dial.url === CODEX_RESPONSES_WS_URL
+    if (legacyIncremental && prepared.canonical && dial.url === CODEX_RESPONSES_WS_URL
       && session.retainable && (!control || control.kind === "steering")) {
       continuationFrameText = frameText;
       const continuation = planCodexWsContinuation(frameText, session.continuation);
@@ -281,18 +296,27 @@ export async function codexWsUpstreamFetch(
             metadataContext: codexWsMetadataContext(init, prepared.model) });
         };
       }
-    } else decision(!incrementalEnabled ? "disabled" : dial.url !== CODEX_RESPONSES_WS_URL ? "unsupported-shape" : "cold-connection", 0);
+    } else if (!configuredIncremental) {
+      decision(!legacyIncremental ? "disabled" : dial.url !== CODEX_RESPONSES_WS_URL ? "unsupported-shape" : "cold-connection", 0);
+    }
   } catch {
     return sseFallback(url, init);
   }
+  const incrementalPlan = incrementalEligible ? prepareIncrementalFrame(session, frameText, caller) : undefined;
+  const outboundPrepared = incrementalPlan ? { ...prepared, frameText: incrementalPlan.frameText } : exchangePrepared;
+  if (codexWsCreateFrameExceedsLimit(outboundPrepared.frameText)) {
+    session.dispose();
+    return sseFallback(url, init);
+  }
   return codexWsExchange({
-    session, url, init, prepared: exchangePrepared, sseFallback, onQuota, beforeDispatch,
+    session, url, init, prepared: outboundPrepared, incrementalPlan, sseFallback, onQuota, beforeDispatch,
     onTransport, observeTransport,
     nativeControl: control,
-    beforeContinuation, onPhysicalDispatch: () => onPhysicalDispatch?.(exchangePrepared.frameText), onContinuationDispatch,
+    beforeContinuation, onPhysicalDispatch, onContinuationDispatch,
     continuationFrameText,
     retryFullInput,
     onContinuationDecision: decision,
+    recoverPhysicalSend: recoverPhysicalSend && (send => recoverPhysicalSend(send, estimateTokens(frameText, prepared.model))),
     preOutputRefusalHold,
     bunVersion: typeof runtime === "string" ? runtime : runtime.version,
     metadataContext: codexWsMetadataContext(init, prepared.model),

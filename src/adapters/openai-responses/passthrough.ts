@@ -459,6 +459,7 @@ export function createResponsesPassthroughAdapter(provider: OcxProviderConfig): 
                 ),
                 {
                   preserveRawReasoningContent: provider.preserveResponsesReasoningContent === true,
+                  translatorBudget,
                   dropNullContentChannel: !isOpenAiOperatedResponsesDestination(provider),
                   stripEncryptedContent: threadServingIdentityChanged || requiresPlaintextReasoningReplay(provider),
                   dropForeignItemId: parsed._dropForeignReasoningItemIds === true,

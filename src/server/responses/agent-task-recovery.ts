@@ -120,6 +120,13 @@ export type AgentTaskRecoveryResult =
   | { readonly recovered: true }
   | { readonly recovered: false; readonly reason: AgentTaskRecoveryFailureReason };
 
+interface RecoverySend {
+  model: string;
+  status: number | undefined;
+  durationMs: number;
+  usage: unknown;
+}
+
 export type AgentTaskRecoveryDeliveryResult =
   | { readonly recovered: false; readonly reason?: AgentTaskRecoveryFailureReason }
   | {
@@ -136,6 +143,8 @@ interface AgentTaskRecoveryCallContext {
   resolvedAdmission?: Pick<DataPlaneAdmission, "kind">;
   apiKeyHeaderPresent?: boolean;
   traceId?: string;
+  /** Only the caller that starts a flight observes its sends. */
+  onSend?: (send: RecoverySend) => void;
 }
 
 type AgentTaskRecoveryCacheContext = Pick<
@@ -638,7 +647,7 @@ export async function recoverAgentTaskHistory(
           options.cacheEntries ?? 200,
           signal => {
             recoveryCount += 1;
-            return requestRecovery(admission, envelope, options, signal, context.traceId);
+            return requestRecovery(admission, envelope, options, signal, context.onSend, context.traceId);
           },
           historySignal,
         );
@@ -797,12 +806,13 @@ function sseDataPayloads(raw: string): string[] {
   return payloads;
 }
 
-function assignmentFromRecoverySse(
+function parseRecoverySse(
   raw: string,
   envelope: AgentEnvelope,
   traceId?: string,
-): string | null {
+): { assignment: string | null; usage: unknown } {
   let assignment: string | null = null;
+  let usage: unknown;
   let completed = false;
   let terminalFailure = false;
   let conflictingAssignments = false;
@@ -820,6 +830,9 @@ function assignmentFromRecoverySse(
       || event?.type === "response.incomplete"
       || event?.type === "error"
     ) terminalFailure = true;
+    if (event?.type === "response.completed" || event?.type === "response.failed" || event?.type === "response.incomplete") {
+      usage = event.response?.usage ?? usage;
+    }
     if (event?.type === "response.completed" && event.response?.status === "completed") {
       completed = true;
     }
@@ -854,9 +867,9 @@ function assignmentFromRecoverySse(
       else if (assignment !== candidate) conflictingAssignments = true;
     }
   }
-  const reject = (reason: string): null => {
+  const reject = (reason: string): { assignment: null; usage: unknown } => {
     diagnose(traceId, { stage: "extraction", outcome: "rejected", reason });
-    return null;
+    return { assignment: null, usage };
   };
   if (terminalFailure) return reject("terminal_failure");
   if (malformedEvent) return reject("malformed_sse");
@@ -870,7 +883,7 @@ function assignmentFromRecoverySse(
     assignmentBytes: Buffer.byteLength(assignment),
     assignmentFingerprint: assignmentFingerprint(assignment),
   });
-  return assignment;
+  return { assignment, usage };
 }
 
 interface RecoveryAttempt {
@@ -886,6 +899,7 @@ async function attemptRecovery(
   signal: AbortSignal,
   abortSignal: AbortSignal | undefined,
   deadlineSignal: AbortSignal,
+  onSend: AgentTaskRecoveryCallContext["onSend"],
   traceId?: string,
 ): Promise<RecoveryAttempt> {
   const terminal = (resolution: AgentTaskRecoveryResolution): RecoveryAttempt => ({
@@ -901,6 +915,8 @@ async function attemptRecovery(
     outcome: "started",
     recoveryModel: sanitizeLogMetadataString(recoveryModel) ?? DEFAULT_AGENT_TASK_RECOVERY_MODEL,
   });
+  let status: number | undefined;
+  let usage: unknown;
   try {
     const response = await fetch(RECOVERY_ENDPOINT, {
       method: "POST",
@@ -909,6 +925,7 @@ async function attemptRecovery(
       signal,
       redirect: "error",
     });
+    status = response.status;
     if (!response.ok) {
       // A rejected or never-settling cancellation must not extend the recovery deadline.
       try { void response.body?.cancel().catch(() => undefined); } catch { /* already closed */ }
@@ -968,7 +985,9 @@ async function attemptRecovery(
       outcome: "accepted",
       responseBytes: Buffer.byteLength(body.text),
     });
-    const assignment = assignmentFromRecoverySse(body.text, envelope, traceId);
+    const result = parseRecoverySse(body.text, envelope, traceId);
+    usage = result.usage;
+    const { assignment } = result;
     return terminal(assignment === null
       ? { recovered: false, reason: "recovery_invalid_output" }
       : { recovered: true, assignment });
@@ -990,6 +1009,8 @@ async function attemptRecovery(
     return decodeFailure === "invalid_utf8"
       ? terminal({ recovered: false, reason: "recovery_invalid_output" })
       : { resolution: { recovered: false, reason: "recovery_transport_error" }, retryable: true };
+  } finally {
+    onSend?.({ model: recoveryModel, status, durationMs: Date.now() - startedAt, usage });
   }
 }
 
@@ -997,7 +1018,8 @@ async function requestRecovery(
   admission: RecoveryAdmission,
   envelope: AgentEnvelope,
   options: AgentTaskRecoveryOptions,
-  abortSignal?: AbortSignal,
+  abortSignal: AbortSignal | undefined,
+  onSend: AgentTaskRecoveryCallContext["onSend"],
   traceId?: string,
 ): Promise<AgentTaskRecoveryResolution> {
   const controller = new AbortController();
@@ -1018,7 +1040,7 @@ async function requestRecovery(
       : 0;
     for (let attempt = 0; ; attempt += 1) {
       const { resolution, retryable, retryHeaders } = await attemptRecovery(
-        admission, envelope, options, signal, abortSignal, controller.signal, traceId,
+        admission, envelope, options, signal, abortSignal, controller.signal, onSend, traceId,
       );
       if (resolution.recovered || !retryable || attempt >= retries) return resolution;
       // Retry-After is the provider's floor, not something our backoff cap may shorten.
@@ -1099,7 +1121,7 @@ export async function recoverEncryptedAgentTaskForDelivery(
     options.cacheEntries ?? 200,
     signal => {
       resolverStarted = true;
-      return requestRecovery(admission, envelope, options, signal, context.traceId);
+      return requestRecovery(admission, envelope, options, signal, context.onSend, context.traceId);
     },
     context.abortSignal,
   );

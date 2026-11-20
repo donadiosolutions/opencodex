@@ -19,7 +19,7 @@ import {
 import { InvalidCursorError } from "../../routing/history/cursor";
 import { usageHistoryMetadata } from "../../usage/retention-contract";
 import { requestLogEntryFromPersistedUsage } from "../request-log";
-import { requestLogDto } from "./shared";
+import { publicLogUsage, requestLogDto } from "./shared";
 import { jsonResponse } from "../auth-cors";
 import type { ManagementContext } from "./context";
 import type { PersistedUsageEntry } from "../../usage/log";
@@ -211,7 +211,7 @@ export async function handleRequestHistoryRoutes(ctx: ManagementContext): Promis
         affinity: entry.affinity
           ? { move: entry.affinity, reason: entry.affinityReason ?? null }
           : null,
-        attemptSequence: entry.attempts ?? [],
+        attemptSequence: entry.attempts?.map(attempt => ({ ...attempt, ...publicLogUsage(attempt.usage) })) ?? [],
         outcome: {
           status: entry.status,
           ...(entry.terminalStatus ? { terminalStatus: entry.terminalStatus } : {}),

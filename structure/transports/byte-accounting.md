@@ -5,6 +5,7 @@ Native result continuations and function-result injection follow [the mode-speci
 Native steering follows [the shared WebSocket contract](streaming-health.md#experimental-native-mid-turn-steering); this surface's defaults remain unchanged.
 
 Translated Chat inline-image normalization keeps retained wire bytes in its aggregate budget while process-wide native-decode admission and a decoded-pixel ceiling bound memory outside that byte accounting.
+Microsoft 365 Copilot's bounded UploadFile workspace uses the provider_image_upload observation; its [provider contract](../providers/m365-copilot.md) defines image limits and conversation-bound attachment ownership.
 
 Responses body-reader limits and lifetime handling follow the
 [core module ownership](responses.md#core-module-ownership). Raised HTTP concurrency follows the separate admission contract below.
@@ -99,6 +100,9 @@ returns a Buffer view of the coded output, without an explicit full-input UTF-8 
 Zstd still encodes a UTF-8 input buffer that briefly overlaps its coded output for that send.
 Neither codec retains these bytes beyond the send. Admission limits and every byte observation
 still measure the uncompressed body; native codec workspace is not a counted JavaScript copy.
+Optional [history slimming](upload-reduction.md#historical-image-and-tool-context) can shorten a
+native Responses create before this encoding step. Native `/responses/compact` is encoded from
+the complete context.
 
 ## Raised HTTP body admission
 
@@ -147,6 +151,25 @@ It does not bound state beyond the HTTP lifetime or change default-cap concurren
 envelopes, and real HTTP streams; `tests/server/inbound-body-budget.test.ts` covers FIFO/accounting.
 
 ## Stream-buffer accounting
+
+Responses terminal repair in `src/server/responses-terminal-repair.ts` uses the shared incremental
+SSE block buffer. Each append measures its new decoded fragment. Draining measures each consumed
+block to subtract its bytes and keeps the existing byte count for the residual suffix. Delimiter
+searches resume at the scan cursor, and consumed prefixes are compacted before yielding. Replacement overlap admission,
+Unicode decoding, delayed LF handling, terminal decisions and teardown retain their contracts.
+`tests/responses/responses-terminal-repair.test.ts` bounds byte-measurement work by input size
+for fragmented and coalesced frames and checks exact overlap admission with another retained owner.
+
+`src/lib/tool-envelope-echo-filter.ts` retains at most 65,536 UTF-16 code units of
+unresolved marker-line content, independently of its existing bounded fenced-code hold.
+LF and CRLF settle the line without counting toward the limit. A CR at the limit is
+held for one unit of lookahead and counts as content if LF does not follow. Whitespace
+following a whole marker is classified one arriving scalar at a time; only line settlement or
+prose divergence rescans the retained suffix. Exceeding the pending limit clears retained text
+and permanently fails that filter with `TranslatorBudgetExceededError` (`live_transient`,
+128 KiB), without releasing the candidate as prose or claiming a successful echo match.
+`tests/adapters/tool-envelope-echo-whole-line.test.ts` bounds scanned input units at increasing
+padding sizes and covers chunking, Unicode whitespace, exact-limit settlement and refusal.
 
 `src/responses/citation-markers.ts` keeps unchanged streaming memory-citation text, including
 literal `<` characters and complete real blocks, as input spans. Ordinary `<` characters advance
@@ -363,10 +386,23 @@ item/metadata limits and lifecycle behavior; raw continuation replay stays upstr
 
 ## Response-log inspection
 
+`src/lib/outbound-credential-registry.ts` rejects impossible two-code-unit prefix starts
+before slicing an eight-character credential window. Each nonempty window/prefix index owns
+an 8 KiB bitset of UTF-16 low-byte pairs; collisions still require the original exact
+lookup, so Unicode and escaped spellings retain their matching behavior. Per-text work
+remains linear and confirmation/KMP work retains its fail-closed budget. Once every long
+secret has received a complete overlapping-occurrence scan, no further prefix walk is
+needed. `tests/responses/sse-untyped-credential-mask.test.ts` bounds slice/lookup counts
+and covers Unicode collisions, short values, overlapping spans and request isolation.
+
 `src/lib/redact-folding.ts` uses an identity fold and UTF-16 offset map for ASCII
 strings without escape introducers when decoding is enabled, and all ASCII strings
-when it is disabled. Other strings keep the general Unicode/escape fold; all
-credential masking passes still run. `tests/lib/redact.test.ts` compares both paths.
+when it is disabled. The identity offset array is cached lazily and pattern matchers
+request it only after a credential label matches; absent labels allocate no offset
+array. Other strings keep the general Unicode/escape fold, preserving credential
+matching coverage. `tests/lib/redact.test.ts` compares both paths.
+Literal ASCII without label delimiters (`:`, `=`, `<`) or escape introducers
+(`\`, `%`, `&`) bypasses label folding; token-pattern redaction still runs.
 
 `src/lib/redact.ts` scans XML identifying attributes over disjoint tag spans rather than
 searching the remaining suffix from each opening delimiter. Tag terminators are quote-aware,
@@ -375,6 +411,7 @@ The decoded and raw passes
 retain the original-offset mapping and mask a credential-bearing element through the rest
 of the input. `tests/lib/redact.test.ts` counts delimiter searches and scanned characters across doubled inputs
 without a machine-speed deadline, as well as malformed and escaped credential coverage.
+The redactor masks bare Hub relay leases and values carried by `X-OpenCodex-API-Key`.
 
 `src/server/response-log-body.ts` forwards raw response chunks on downstream demand.
 Diagnostic retention is limited to 32 MiB for JSON and an 8 KiB prefix for other
@@ -467,6 +504,19 @@ Native steering retains fixed phase deadlines and reconciled replay output; see 
 Native steering generation overrides, explicit public-API eligibility and the consent-gated wire probe follow the [shared control contract](streaming-health.md#steering-settings-public-api-and-diagnostic-probe); this owner does not change routing or execute diagnostic tools.
 
 ## Durable spill admission
+
+`src/responses/state/spill-codec.ts` encodes compressible 128 KiB–16 MiB payloads as self-contained
+`{ "ocxSpillCodec": "zstd/1", "decodedBytes", "data" }` envelopes with zstd/base64 when the whole envelope saves at least 12.5%.
+Other payloads stay plain version-1 JSON. The envelope marker is distinct from the payload's
+`version` (`RESPONSE_SPILL_VERSION` in `src/responses/spill-store.ts`), which remains available to future payload versions.
+References, digests, reservations and disk totals measure the envelope. The reader handles both
+formats, enforces a decoded-record ceiling before decompression, then validates the original ID
+and payload. The resident cap uses decoded content. Records have no parent-file dependencies.
+The reader must remain available until compressed records expire. An older reader classifies a
+compressed record as `spill_corrupt` and answers `previous_response_not_found`, prompting a full-history
+resend. Plain records work with either reader.
+`tests/responses/responses-spill-compression.test.ts` covers savings, the decoded ceiling, legacy
+records, payload versions, snapshot reload, and thread-isolated replay.
 
 `enforceSpilledResponseBudget` in `src/responses/state.ts` owns the durable spill ceiling
 described in [Codex home](../codex-home.md). A queued publication, and the shutdown fallback, call it

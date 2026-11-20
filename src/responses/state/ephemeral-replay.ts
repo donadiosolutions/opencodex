@@ -1,6 +1,7 @@
 import { enforceAppOwnedMemoryBudget } from "../../lib/app-owned-memory";
 import type { OcxProviderContinuationState } from "../../types";
-import type { ResidentInput, ResidentResponseState } from "../state";
+import type { ResidentInput, ResidentResponseState } from "./entry-types";
+import type { ConnectionReplayScope } from "./connection-scope";
 import { isBodyNonPersistable, markBodyNonPersistable } from "./body-policy";
 import { hasPendingClientToolCall } from "./unforced-store-false";
 import type { replayScopeMatches as ReplayScopeMatches, validReplayOwnerKey as ValidReplayOwnerKey } from "./replay-owner";
@@ -34,17 +35,16 @@ export type RememberResponseStateOptions = {
   ephemeralScope?: string;
   replayOwnerKey?: string | null;
   compiledPlaintext?: boolean;
+  connectionScope?: ConnectionReplayScope;
 };
 
 export interface EphemeralReplayStore {
   now: () => number;
   inputItems: (input: unknown) => unknown[];
   normalizedClientThreadId: (value: unknown) => string | undefined;
-  ensureLoaded: () => void;
   measureResidentEntry: (id: string, entry: ResidentInput) => ResidentResponseState | null;
   setResidentEntry: (id: string, entry: ResidentInput) => void;
-  schedulePersist: () => void;
-  canReplace: (id: string, thread: string | undefined, owner: string | null | undefined) => boolean;
+  canReplace: (id: string, thread: string | undefined, owner: string | null | undefined, scope: ConnectionReplayScope | undefined) => boolean;
   validReplayOwnerKey: typeof ValidReplayOwnerKey;
   replayScopeMatches: typeof ReplayScopeMatches;
 }
@@ -212,11 +212,10 @@ export function rememberResponseState(
   const unforcedStoreFalse = request.store === false && !opts?.force;
   if (unforcedStoreFalse && !(opts?.retainForToolContinuation === true && hasPendingClientToolCall(response.output))) return;
   const bound = requireStore();
-  bound.ensureLoaded();
   if ((opts?.compiledPlaintext && !bound.validReplayOwnerKey(opts.replayOwnerKey))
     || opts?.replayOwnerKey === null
     || (opts?.replayOwnerKey !== undefined && !bound.validReplayOwnerKey(opts.replayOwnerKey))) return;
-  if (!bound.canReplace(response.id, opts?.clientThreadId, opts?.replayOwnerKey)) return;
+  if (!bound.canReplace(response.id, opts?.clientThreadId, opts?.replayOwnerKey, opts?.connectionScope)) return;
   const normalizedProviderState: OcxProviderContinuationState = typeof providerState === "string"
     ? { cursor: { conversationId: providerState } }
     : structuredClone(providerState ?? {});
@@ -235,9 +234,9 @@ export function rememberResponseState(
     providerOutputStart: requestItems.length,
     ...(Object.keys(normalizedProviderState).length > 0 ? { providers: normalizedProviderState } : {}),
     ...(unforcedStoreFalse ? { unforcedStoreFalse: true } : {}),
+    ...(opts?.connectionScope ? { connectionOwned: true as const, connectionScope: opts.connectionScope } : {}),
   });
-  enforceAppOwnedMemoryBudget();
-  bound.schedulePersist();
+  if (!opts?.connectionScope) enforceAppOwnedMemoryBudget();
 }
 
 export function resetEphemeralReplayForTests(): void {

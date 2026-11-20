@@ -1,6 +1,7 @@
 import { carryProxyError } from "../lib/client-error-body";
 import type { ResponsesTerminalStatus } from "../bridge";
 import { observeRequestTransport, recordReceivedBytes, recordUpstreamResponse, recordSyntheticTerminal, recordDeliveredOutput, recordDownstreamTerminal } from "./transaction-capture";
+import { sealedCredentialRefusals } from "./request-log-attempt-recovery";
 import {
   cyberPolicyErrorType,
   CYBER_POLICY_ERROR_CODE,
@@ -9,6 +10,7 @@ import {
   isCyberPolicyMessage,
   isTerminalRefusalCode,
   recognizedUpstreamError,
+  responsesCompletionError,
 } from "../lib/errors";
 import { redactSecretString } from "../lib/redact";
 import { isTranslatorBudgetExceededError } from "../lib/translator-budget";
@@ -16,6 +18,7 @@ import { ExplicitBodyStallError } from "../lib/response-body-inactivity";
 import { carryPacedStream, pacedQueuingStrategy } from "../lib/paced-stream";
 import { carryReplayRefusal, isReplayRefusalResponse } from "../lib/upstream-retry";
 import { isUsageDebugEnabled } from "../usage/debug";
+import { ESTIMATED_USAGE_HEADER } from "./responses/estimated-usage";
 import {
   addRequestLog,
   addFinalRequestLog,
@@ -850,7 +853,7 @@ export function terminalStatusFromParsed(parsed: unknown, typedBareSeen = false)
   if (!typedBareSeen && isUntypedBareUpstreamError(parsed) && isCyberPolicyCode(bareUpstreamError(parsed)?.errorCode)) return "failed";
   switch (type) {
     case "response.completed":
-      return "completed";
+      return responsesCompletionError(parsed) == null ? "completed" : "failed";
     case "response.failed":
       return "failed";
     case "response.incomplete":
@@ -891,7 +894,7 @@ export function completedResponseFromParsedEvent(
   json: unknown,
 ): { id?: unknown; output?: unknown; status?: unknown } | null {
   if (!json || typeof json !== "object" || Array.isArray(json)
-    || (json as { type?: unknown }).type !== "response.completed") return null;
+    || (json as { type?: unknown }).type !== "response.completed" || responsesCompletionError(json) != null) return null;
   const response = (json as { response?: unknown }).response;
   if (!response || typeof response !== "object" || Array.isArray(response)) return null;
   return response as { id?: unknown; output?: unknown; status?: unknown };
@@ -933,6 +936,7 @@ export function trackSseForRequestLog(
       if (logCtx) recordDeliveredOutput(logCtx);
       onFirstOutput?.();
     },
+    collectUsage: () => logCtx?.clientSseUsageAlreadyInspected !== true,
   });
 
   return new ReadableStream<Uint8Array>({
@@ -956,7 +960,8 @@ export function trackSseForRequestLog(
         // The upstream read rejected: the 200 body died mid-flight. Client
         // cancellation is the caller's separate 499 path, so a cancel-drained
         // pending read (cancelled=true) must not carry the truncation marker.
-        if (!cancelled && !terminalReported && logCtx?.activeAttempt) {
+        if (!cancelled && !terminalReported && logCtx?.activeAttempt
+          && !sealedCredentialRefusals.has(logCtx.activeAttempt)) {
           logCtx.activeAttempt.streamAborted = true;
         }
         if (!cancelled && !terminalReported) reportTerminal("incomplete");
@@ -1191,6 +1196,8 @@ export type SseInspector = {
 export type SseInspectorHandlers = {
   onTerminal?: (status: ResponsesTerminalStatus, httpStatusOverride?: number) => void;
   logCtx?: RequestLogContext;
+  /** Client-side reinspection leaves usage to the native raw-body observer. */
+  collectUsage?: boolean | (() => boolean);
   onCompletedResponse?: (response: { id?: unknown; output?: unknown; status?: unknown }) => void;
   /** A reconstructed snapshot for any valid terminal kind; unlike persistence, includes failures. */
   onTerminalResponse?: (
@@ -1279,9 +1286,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
   let decoder: TextDecoder | null = new TextDecoder();
   let reported = false;
   let sawTerminal = false;
-  // A policy terminal ends the client stream, so a later completion in the same stream is not a
-  // turn the client received and must not become continuation state.
-  let policyTerminalSeen = false;
+  // A later completion after a provider verdict cannot become continuation state.
+  let completionBlocked = false;
   const classifyTerminal = createTerminalStatusTracker();
   let disposed = false;
   let delimiterTail: Uint8Array = EMPTY_BYTES;
@@ -1433,7 +1439,8 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
       }
     }
     if (!reported && handlers.logCtx) {
-      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed, diagnosticObserver);
+      const collectUsage = typeof handlers.collectUsage === "function" ? handlers.collectUsage() : handlers.collectUsage;
+      inspectResponseLogSsePayloadParsed(handlers.logCtx, payload, parsed, collectUsage, diagnosticObserver);
     }
     // Before any terminal handling: a consumer deciding on the whole turn must observe this
     // payload even when the terminal snapshot that follows no longer mentions it.
@@ -1540,8 +1547,9 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
     const policyTerminal = status === "failed"
       && isPolicyRewriteType(parsed)
       && cyberPolicyTerminalError(parsed) !== undefined;
-    // Only a policy frame that ends the stream first; after an earlier terminal it ended nothing.
-    if (policyTerminal && !sawTerminal) policyTerminalSeen = true;
+    if (!sawTerminal && (policyTerminal || (parsedEvent?.type === "response.completed" && status === "failed"))) {
+      completionBlocked = true;
+    }
     if (status) sawTerminal = true;
     try {
       if (!reported && handlers.onTerminal && status) {
@@ -1552,7 +1560,7 @@ export function createSseInspector(handlers: SseInspectorHandlers): SseInspector
         }
         handlers.onTerminal(status, policyTerminal ? 400 : undefined);
       }
-      if (status === "completed" && !policyTerminalSeen && reconstructedTerminalResponse && handlers.onCompletedResponse) {
+      if (status === "completed" && !completionBlocked && reconstructedTerminalResponse && handlers.onCompletedResponse) {
         handlers.onCompletedResponse(reconstructedTerminalResponse);
       }
       if (status && reconstructedTerminalResponse && handlers.onTerminalResponse) {
@@ -1867,7 +1875,8 @@ export function consumeForInspection(
           // received; the router's equivalent turn carries 502 + streamAborted
           // (codex-router #139).
           const verdict = bareEvidence?.verdict;
-          if (logCtx.activeAttempt && !verdict?.refusalCode && verdict?.httpStatus === undefined) logCtx.activeAttempt.streamAborted = true;
+          if (logCtx.activeAttempt && !sealedCredentialRefusals.has(logCtx.activeAttempt)
+            && !verdict?.refusalCode && verdict?.httpStatus === undefined) logCtx.activeAttempt.streamAborted = true;
         }
         const verdict = bareEvidence?.verdict;
         // The request log already reduced the same evidence into terminalHttpStatus. Falling back
@@ -1927,6 +1936,7 @@ const PASSTHROUGH_DROP_HEADERS: ReadonlySet<string> = new Set([
   "te",
   "trailer",
   "upgrade",
+  ESTIMATED_USAGE_HEADER,
 ]);
 
 export interface CodexSafetyBufferingFilterOptions {

@@ -7,6 +7,7 @@ import {
   type DiagnosticEventTypeV1, type DiagnosticSendV1, type TransactionDiagnosticsV1,
 } from "../diagnostics/transaction";
 import type { RequestLogContext } from "./request-log";
+import { sealedCredentialRefusals } from "./request-log-attempt-recovery";
 import type { ProviderFetch, TransportObservation } from "./responses/fetch-helpers";
 import { httpStatusFromTerminalError } from "../lib/errors";
 import { version as proxyVersion } from "../../package.json";
@@ -27,6 +28,7 @@ function sendOwnerFor(attempt: NonNullable<RequestLogContext["activeAttempt"]>):
   if (!owner || owner.attemptId !== attempt.attemptId) {
     owner = { attemptId: attempt.attemptId, sendCount: 0 };
     sendOwners.set(attempt, owner);
+    activeSends.delete(attempt);
   }
   return owner;
 }
@@ -61,7 +63,7 @@ export async function captureAdapterExecution<T>(ctx: RequestLogContext,
   try { return await execute(observed); }
   finally {
     captureSafely(() => {
-      if (!attempt || invoked || attempt.attemptId !== attemptId) return;
+      if (!attempt || invoked || attempt.attemptId !== attemptId || sealedCredentialRefusals.has(attempt)) return;
       const owner = sendOwnerFor(attempt);
       owner.sendCount += 1;
       attempt.sendCount = owner.sendCount;
@@ -246,8 +248,14 @@ export function recordRequestedReasoning(ctx: RequestLogContext, caller: unknown
   });
 }
 
+function activeAttemptSend(attempt: RequestLogContext["activeAttempt"]): DiagnosticSendV1 | undefined {
+  return attempt && !sealedCredentialRefusals.has(attempt)
+    && sendOwners.get(attempt)?.attemptId === attempt.attemptId
+    ? activeSends.get(attempt) : undefined;
+}
+
 function activeSend(ctx: RequestLogContext): DiagnosticSendV1 | undefined {
-  return ctx.activeAttempt ? activeSends.get(ctx.activeAttempt) : undefined;
+  return activeAttemptSend(ctx.activeAttempt);
 }
 
 function identifier(d: TransactionDiagnosticsV1, field: string, raw: unknown, source: "client" | "upstream", first = false): string | undefined {
@@ -264,9 +272,9 @@ function identifier(d: TransactionDiagnosticsV1, field: string, raw: unknown, so
   return result.value;
 }
 
-export function finishAttemptDiagnostics(attempt: object, status: number): void {
+export function finishAttemptDiagnostics(attempt: NonNullable<RequestLogContext["activeAttempt"]>, status: number): void {
   captureSafely(() => {
-    const send = activeSends.get(attempt);
+    const send = activeAttemptSend(attempt);
     if (send) finishDiagnosticSend(send, { endedAt: Date.now(), status });
   });
 }
@@ -409,7 +417,7 @@ export function recordForwardedRequest(ctx: RequestLogContext, transport: "http"
     }
     const attempt = ctx.activeAttempt;
     recordAuthSend(ctx);
-    if (attempt) {
+    if (attempt && !sealedCredentialRefusals.has(attempt)) {
       attempt.upstreamTransport = attempt.upstreamTransport && attempt.upstreamTransport !== transport ? "mixed" : transport;
       const owner = sendOwnerFor(attempt);
       const send = beginDiagnosticSend(owner, {
@@ -680,9 +688,9 @@ export function recordReceivedBytes(ctx: RequestLogContext, bytes: number): void
 export function finalizeDiagnostics(ctx: RequestLogContext, status: number, requestId: string, start: number, terminal = false): void {
   captureSafely(() => {
     const d = diagnostics(ctx, requestId, start);
-    if (ctx.activeAttempt) {
+    if (ctx.activeAttempt && !sealedCredentialRefusals.has(ctx.activeAttempt)) {
       const owner = sendOwners.get(ctx.activeAttempt);
-      if (owner) ctx.activeAttempt.sendCount = sendOwnerFor(ctx.activeAttempt).sendCount;
+      if (owner && owner.attemptId === ctx.activeAttempt.attemptId) ctx.activeAttempt.sendCount = owner.sendCount;
     }
     d.terminalMappedStatus = status;
     finishRecoveryCapture(d, status);
