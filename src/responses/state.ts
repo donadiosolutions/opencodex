@@ -1,9 +1,11 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, unlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, rmSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { atomicWriteFileAsync, getConfigDir, resolveWriteTarget } from "../config";
-import type { RetainedStoreSnapshot } from "../lib/app-owned-memory";
+import { appOwnedBytesSnapshot, type RetainedStoreSnapshot } from "../lib/app-owned-memory";
 import { windowsSecretAclApplies } from "../lib/windows-secret-acl";
 import type { OcxProviderContinuationState } from "../types";
+import type { ResidentResponseState, SpilledResponseState, SpillFailedResponseState, StoredResponseState, ResidentInput, PreviousResponseReplayFailure } from "./state/entry-types";
+export type { ResidentResponseState, SpilledResponseState, SpillFailedResponseState, StoredResponseState, ResidentInput, PreviousResponseReplayFailure } from "./state/entry-types";
 import {
   deleteResponseSpill,
   inspectResponseSpillDir,
@@ -21,7 +23,8 @@ import {
 import { collectReferencedSpillFileNames, snapshotReferencedSpillFileNames } from "./state/spill-inspect";
 import { selectSnapshotEntries, snapshotPayload } from "./state/snapshot-select";
 import { expandStoredResponseInput } from "./state/replay-input";
-import { hasPendingClientToolCall } from "./state/unforced-store-false";
+import { bindConnectionScopeStore, connectionReplayScopeAcceptsEntry, connectionScopeEntryExpired, forgetConnectionScopeEntry, isConnectionOwnedResponseState, noteConnectionScopeEntry, oldestConnectionScopeResident, planConnectionScopeEvictions, type ConnectionReplayScope } from "./state/connection-scope";
+export { mintConnectionReplayScope, connectionReplayScopeLive, connectionReplayScopeForThread, connectionReplayScopeOwnerKey, releaseConnectionReplayScope, type ConnectionReplayScope } from "./state/connection-scope";
 import { normalizedClientThreadId, replayScopeMatches, validReplayOwnerKey } from "./state/replay-owner";
 import { computeResponseStateMetrics, type ResponseStateMetrics } from "./state/metrics";
 export type { ResponseStateMetrics } from "./state/metrics";
@@ -33,7 +36,7 @@ export type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseS
 import type { ResponseSpillWriteFailureCode, ResponseSpillWriteStatus, ResponseSpillWriteFailureOrigin } from "./state/spill-failure";
 export { responseAdmissionCountersForTests } from "./state/spill-failure";
 import { admissionCounters, noteSpillWriteFailure, noteSpillWriteSuccess, resetSpillCountersForTests, spillCounters, spillWriteHealth } from "./state/spill-failure";
-import { loadSnapshotEntry } from "./state/snapshot-codec";
+import { loadSnapshotEntries, snapshotFileFingerprint, stageSnapshotEntries, type SnapshotLoadStore } from "./state/snapshot-codec";
 export { flushPendingResponseSpillsForTests, awaitResponseSpillPublicationTailForTests, pendingResponseSpillMetricsForTests, setResponseSpillShutdownBudgetForTests, setResponseSpillAsyncAclAttemptBudgetForTests, setResponseSpillShutdownTerminalizationPassLimitForTests } from "./state/spill-queue";
 import {
   bindSpillQueueStore,
@@ -71,7 +74,7 @@ const MAX_STORED_RESPONSES = 1_000;
  *
  * A day is safe to hold because retention is no longer what bounds this store: the resident cap
  * (MAX_STORED_RESPONSE_BYTES), the spill ceiling (MAX_SPILLED_RESPONSE_BYTES) and the entry count
- * all evict oldest-first, and every turn re-stores the whole chain under a fresh id, so the live
+ * evict older entries first within each retention class. Every turn re-stores the chain under a fresh id, so the live
  * conversation is the last thing any of those three caps would drop. Raising the TTL therefore
  * moves eviction from the clock to those budgets rather than growing the ceiling.
  */
@@ -121,60 +124,13 @@ const SNAPSHOT_FILE_MAX_BYTES = 32 * 1024 * 1024;
 const MAX_SNAPSHOT_REWRITE_ATTEMPTS = 4;
 const RESPONSE_SPILL_SHUTDOWN_TERMINALIZATION_MAX_PASSES = MAX_STORED_RESPONSES + 1;
 
-export interface ResidentResponseState {
-  kind: "resident";
-  createdAt: number;
-  clientThreadId?: string;
-  replayOwnerKey?: string;
-  items: unknown[];
-  /** Index in `items` where provider output begins; see clientCarriedPrefixLength. */
-  providerOutputStart?: number;
-  providers?: OcxProviderContinuationState;
-  unforcedStoreFalse?: boolean;
-  sizeBytes: number;
-}
-
-export interface SpilledResponseState {
-  kind: "spill";
-  createdAt: number;
-  clientThreadId?: string;
-  replayOwnerKey?: string;
-  /** Mirrors the spilled payload boundary so a spilled entry keeps its anchor. */
-  providerOutputStart?: number;
-  providers?: OcxProviderContinuationState;
-  unforcedStoreFalse?: boolean;
-  spill: ResponseSpillRef;
-  sizeBytes: number;
-}
-
-export interface SpillFailedResponseState {
-  kind: "spill-failed";
-  createdAt: number;
-  sizeBytes: number;
-}
-
-export type StoredResponseState = ResidentResponseState | SpilledResponseState | SpillFailedResponseState;
-export type ResidentInput = Omit<ResidentResponseState, "kind" | "sizeBytes">;
-
-export type PreviousResponseReplayFailure = {
-  code: "previous_response_not_found";
-  reason:
-    | "spill_missing"
-    | "spill_corrupt"
-    | "spill_failed"
-    | "spill_too_large"
-    | "ephemeral_scope_mismatch"
-    | "scope_mismatch";
-};
-
 const states = new Map<string, StoredResponseState>();
 let storedResponseBytes = 0;
 let residentResponseBytes = 0;
-let oldestResidentId: string | undefined;
-let oldestResidentAt: number | null = null;
+let budgetCandidate: [string, ResidentResponseState] | undefined;
 let byteCapOverride: number | null = null;
 let snapshotTotalCapOverride: number | null = null;
-let stateRevision = 0;
+let durableRevision = 0;
 /** Byte length and digest of the last snapshot actually written, for the
  *  identical-payload skip and the size-scaled debounce. The payload itself is not
  *  retained: at the 24 MiB bound that would double the snapshot's memory cost. */
@@ -230,6 +186,7 @@ const PENDING_SPILL_UNLINKS_MAX = 128;
 function deferSupersededSpill(ref: ResponseSpillRef | undefined): void {
   if (!ref) return;
   pendingSpillUnlinks.push(ref);
+  noteDurableMutation();
   while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
     deleteResponseSpill(pendingSpillUnlinks.shift()!);
   }
@@ -342,16 +299,17 @@ function measureResidentEntry(id: string, entry: ResidentInput): ResidentRespons
   return sizeBytes === null ? null : { kind: "resident", ...entry, sizeBytes };
 }
 
+function considerBudgetCandidate(id: string, entry: StoredResponseState): void {
+  if (entry.kind !== "resident" || spillQueueHoldsResidentCandidate(id, entry)) return;
+  const oldest = budgetCandidate?.[1];
+  // Prefer memory-only residents, then the oldest eligible resident within that class.
+  if (!oldest || (entry.connectionOwned === oldest.connectionOwned
+    ? entry.createdAt < oldest.createdAt : entry.connectionOwned === true)) budgetCandidate = [id, entry];
+}
+
 function recomputeOldestResident(): void {
-  oldestResidentId = undefined;
-  oldestResidentAt = null;
-  for (const [id, state] of states) {
-    if (state.kind !== "resident") continue;
-    if (spillQueueHoldsResidentCandidate(id, state)) continue;
-    if (oldestResidentAt !== null && state.createdAt >= oldestResidentAt) continue;
-    oldestResidentId = id;
-    oldestResidentAt = state.createdAt;
-  }
+  budgetCandidate = undefined;
+  for (const [id, entry] of states) considerBudgetCandidate(id, entry);
 }
 
 function replaceMapEntry(id: string, next: StoredResponseState, expected?: StoredResponseState): boolean {
@@ -361,6 +319,7 @@ function replaceMapEntry(id: string, next: StoredResponseState, expected?: Store
   storedResponseBytes += next.sizeBytes;
   if (existing?.kind === "resident") {
     residentResponseBytes -= existing.sizeBytes;
+    forgetConnectionScopeEntry(id, existing);
   }
   if (next.kind === "resident") {
     residentResponseBytes += next.sizeBytes;
@@ -369,13 +328,9 @@ function replaceMapEntry(id: string, next: StoredResponseState, expected?: Store
   if (residentResponseBytes < 0) residentResponseBytes = 0;
   if (existing) states.delete(id);
   states.set(id, next);
-  if (oldestResidentId === id) {
-    recomputeOldestResident();
-  } else if (next.kind === "resident" && (oldestResidentAt === null || next.createdAt < oldestResidentAt)) {
-    oldestResidentId = id;
-    oldestResidentAt = next.createdAt;
-  }
-  stateRevision += 1;
+  if (budgetCandidate?.[0] === id) recomputeOldestResident();
+  else considerBudgetCandidate(id, next);
+  if (!isConnectionOwnedResponseState(next) || (existing && !isConnectionOwnedResponseState(existing))) noteDurableMutation();
   return true;
 }
 
@@ -396,16 +351,18 @@ function deleteOwnedSpills(entry: StoredResponseState): void {
 function deleteEntry(id: string, options: { deleteSpill?: boolean } = {}): void {
   const existing = states.get(id);
   if (!existing) return;
-  const supersededSpill = cancelPendingResponseSpill(id);
+  const scoped = isConnectionOwnedResponseState(existing);
+  const supersededSpill = scoped ? undefined : cancelPendingResponseSpill(id);
   storedResponseBytes -= existing.sizeBytes;
   if (existing.kind === "resident") {
     residentResponseBytes -= existing.sizeBytes;
+    forgetConnectionScopeEntry(id, existing);
   }
   if (storedResponseBytes < 0) storedResponseBytes = 0;
   if (residentResponseBytes < 0) residentResponseBytes = 0;
   states.delete(id);
-  if (oldestResidentId === id) recomputeOldestResident();
-  stateRevision += 1;
+  if (budgetCandidate?.[0] === id) recomputeOldestResident();
+  if (!scoped) noteDurableMutation();
   if (options.deleteSpill !== false) deleteOwnedSpills(existing);
   if (options.deleteSpill !== false && supersededSpill) deleteResponseSpill(supersededSpill);
 }
@@ -424,10 +381,7 @@ function replaceWithSpillFailure(
         // Crash consistency (same rule as replaceSpillEntryAtomically): the old
         // durable snapshot still references this generation until the tombstone
         // itself is durable — queue the unlink for the next stable persist.
-        pendingSpillUnlinks.push(existing.spill);
-        while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
-          deleteResponseSpill(pendingSpillUnlinks.shift()!);
-        }
+        deferSupersededSpill(existing.spill);
       } else {
         deleteOwnedSpills(existing);
       }
@@ -436,6 +390,13 @@ function replaceWithSpillFailure(
 }
 
 function swapResidentForSpill(id: string, expected: ResidentResponseState, ref: ResponseSpillRef): boolean {
+  if (expected.connectionOwned === true) {
+    // Memory-only entries can never become stubs. A queued write reaching this sink is
+    // already off-invariant: unlink the file it produced and keep the resident — the
+    // scope's own eviction or release removes it, never a spill swap.
+    deleteResponseSpill(ref);
+    return false;
+  }
   const base: Omit<SpilledResponseState, "sizeBytes"> = {
     kind: "spill",
     createdAt: expected.createdAt,
@@ -460,6 +421,9 @@ function replaceSpillEntryAtomically(
   expected: SpilledResponseState,
   candidate: ResidentResponseState,
 ): void {
+  // A memory-only candidate never displaces a durable spill entry: the foreign stub is
+  // left exactly as it was and the scoped write is refused.
+  if (candidate.connectionOwned === true) return;
   try {
     const ref = writeResponseSpillDurably(id, {
       createdAt: candidate.createdAt,
@@ -491,10 +455,7 @@ function replaceSpillEntryAtomically(
     // only durable once the debounced snapshot flushes — a crash before that
     // reloads the OLD stub, which must still find its file. Queue the unlink;
     // persistNow() drains the queue only after the snapshot write succeeds.
-    pendingSpillUnlinks.push(expected.spill);
-    while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
-      deleteResponseSpill(pendingSpillUnlinks.shift()!);
-    }
+    deferSupersededSpill(expected.spill);
   } catch (error) {
     noteSpillWriteFailure(error);
     // deferSpillUnlink: the durable snapshot may still reference the old
@@ -506,6 +467,49 @@ function replaceSpillEntryAtomically(
 function setResidentEntry(id: string, entry: ResidentInput): void {
   const expected = states.get(id);
   const candidate = measureResidentEntry(id, entry);
+  const scope = entry.connectionScope;
+  if (scope) {
+    if (!candidate || (expected && (!isConnectionOwnedResponseState(expected) || expected.connectionScope !== scope))) return;
+    if (candidate.sizeBytes > byteCap()) {
+      admissionCounters.oversizedDrops += 1;
+      return;
+    }
+    const plan = (coldBytes: number, coldCount: number) => {
+      const { budgetBytes, retainedBytes } = appOwnedBytesSnapshot();
+      const headroom = Math.min(byteCap() - storedResponseBytes, budgetBytes - retainedBytes) - coldBytes;
+      const countToFree = states.size + coldCount + (expected ? 0 : 1) - MAX_STORED_RESPONSES;
+      return planConnectionScopeEvictions(states, scope, id, countToFree,
+        candidate.sizeBytes - (expected?.sizeBytes ?? 0) - headroom);
+    };
+    const path = loaded ? undefined : snapshotPath();
+    const cutoff = responseExpiryCutoff(now());
+    const cached = coldSnapshotAdmission;
+    // Cache only bounded admission facts, never decoded payloads outside the memory budget.
+    // A changed file or the next durable expiry invalidates them before they can reject a write.
+    if (path && cached?.path === path && cutoff <= cached.oldestCreatedAt
+      && snapshotFileFingerprint(path) === cached.fingerprint) {
+      if (cached.conflictingId === id || !plan(cached.bytes, cached.count)) return;
+    }
+    // Live cold rows protect durable response IDs and count against both byte budgets.
+    const staged = path ? stageSnapshotEntries(path, SNAPSHOT_FILE_MAX_BYTES, snapshotLoadStore, cutoff) : undefined;
+    if (staged?.failed) return;
+    if (staged?.fingerprint !== undefined) coldSnapshotAdmission = {
+      path: staged.path, fingerprint: staged.fingerprint, bytes: staged.bytes, count: staged.entries.size,
+      oldestCreatedAt: staged.oldestCreatedAt, ...(staged.entries.has(id) ? { conflictingId: id } : {}),
+    };
+    if (staged?.entries.has(id)) return;
+    const evictions = plan(staged?.bytes ?? 0, staged?.entries.size ?? 0);
+    if (!evictions || !connectionReplayScopeAcceptsEntry(scope, id, entry.replayOwnerKey, entry.clientThreadId)) return;
+    if (staged) {
+      recoverSnapshotTemps(staged.path);
+      for (const [rowId, row] of staged.entries) replaceMapEntry(rowId, row);
+      finishSnapshotLoad(staged.oversized);
+    }
+    for (const evictedId of evictions) deleteEntry(evictedId);
+    replaceMapEntry(id, candidate, expected);
+    noteConnectionScopeEntry(scope, id);
+    return;
+  }
   if (!candidate) {
     replaceWithSpillFailure(id, expected);
     // A tombstone is tiny but still resident state: the hard-cap invariant
@@ -597,10 +601,7 @@ function admitOversizedCandidate(
       // Same deferred-unlink rule as replaceSpillEntryAtomically: the new stub
       // is durable only after the debounced snapshot, so the old generation
       // stays until a stable persist drains the queue.
-      pendingSpillUnlinks.push(expected.spill);
-      while (pendingSpillUnlinks.length > PENDING_SPILL_UNLINKS_MAX) {
-        deleteResponseSpill(pendingSpillUnlinks.shift()!);
-      }
+      deferSupersededSpill(expected.spill);
     }
   } catch (error) {
     noteSpillWriteFailure(error);
@@ -617,13 +618,13 @@ bindSpillQueueStore({
   currentEntry: (id: string) => states.get(id),
   residentEntries: () => [...states],
   recomputeOldestResident,
-  schedulePersist,
   pruneResponses,
   accountedResponseSpillBytes,
   spillByteCap,
   enforceSpilledResponseBudget,
   terminalizationMaxPasses: () => RESPONSE_SPILL_SHUTDOWN_TERMINALIZATION_MAX_PASSES,
 });
+bindConnectionScopeStore({ deleteEntry, currentEntry: id => states.get(id) });
 
 // Replay provenance must stay proxy-private: a WeakMap distinguishes replayed history from the
 // newly appended input suffix without adding an unknown field that native passthrough could send
@@ -634,6 +635,9 @@ const replayedInputPrefixLengths = new WeakMap<object, number>();
 const clientCarriedReplays = new WeakSet<object>(); // overlap skip: the client resent the window itself
 const replayFailures = new WeakMap<object, PreviousResponseReplayFailure>();
 let loaded = false;
+let coldSnapshotAdmission: {
+  path: string; fingerprint: string; bytes: number; count: number; oldestCreatedAt: number; conflictingId?: string;
+} | undefined;
 let persistTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingPersistPath: string | null = null;
 /** Single-flight gate: overlapping response-state writes serialize (#612). */
@@ -648,17 +652,7 @@ function snapshotPath(): string {
   return join(getConfigDir(), "responses-state.json");
 }
 
-/**
- * Best-effort disk snapshot so previous_response_id chains survive a proxy restart (the
- * dominant expansion-miss cause: an in-memory-only store dies with the process, and the next
- * chained turn then reaches the upstream as a naked delta). Load is lazy on first store access;
- * persistence is debounced + unref'd so the hot path never blocks and the process can exit.
- * Every disk failure is swallowed — the snapshot is a cache, not a source of truth.
- */
-function ensureLoaded(): void {
-  if (loaded) return;
-  loaded = true;
-  const path = snapshotPath();
+function recoverSnapshotTemps(path: string): void {
   // Atomic writes place their temp beside the RESOLVED target, so a symlinked
   // snapshot (dotfiles-managed config dir) strands temps in the link's real
   // directory where a scan of the literal config dir would never see them.
@@ -677,40 +671,37 @@ function ensureLoaded(): void {
       /* best-effort cleanup only; snapshot loading must remain independent */
     }
   }
-  try {
-    if (existsSync(path)) {
-      // Bound the read BEFORE parse: the 24 MiB write cap constrains snapshots
-      // this process wrote, not a pre-existing oversized file. statSync follows
-      // symlinks deliberately — readFileSync below follows them too, so the
-      // size gate must measure the same target the read would.
-      const stat = statSync(path);
-      if (!stat.isFile()) {
-        // Symlink to a FIFO/device (e.g. /dev/zero): reading would block or
-        // return unbounded input. Only regular files are ever parsed.
-      } else if (stat.size > SNAPSHOT_FILE_MAX_BYTES) {
-        admissionCounters.snapshotOversizedRefusals += 1;
-      } else {
-        const raw = JSON.parse(readFileSync(path, "utf-8")) as { version?: unknown; states?: unknown };
-        if ((raw.version === 1 || raw.version === 2) && Array.isArray(raw.states)) {
-          for (const entry of raw.states) {
-            if (!Array.isArray(entry) || entry.length !== 2 || typeof entry[0] !== "string") continue;
-            loadSnapshotEntry(entry[0], entry[1], {
-              replaceMapEntry,
-              stubSize,
-              tombstone,
-              measureResidentEntry,
-              admitOversizedCandidate,
-              byteCap,
-            });
-          }
-        }
-      }
-    }
-  } catch {
-    /* missing/corrupt snapshot: start empty */
-  }
+}
+
+const snapshotLoadStore: SnapshotLoadStore = {
+  replaceMapEntry,
+  stubSize,
+  tombstone,
+  measureResidentEntry,
+  // Spill oversized durable rows directly so first-load prune cannot demote unrelated rows.
+  admitResident(id, entry) {
+    if (entry.sizeBytes > byteCap()) admitOversizedCandidate(id, entry);
+    else replaceMapEntry(id, entry);
+  },
+};
+
+function finishSnapshotLoad(oversized: boolean): void {
+  if (oversized) admissionCounters.snapshotOversizedRefusals += 1;
+  loaded = true;
+  coldSnapshotAdmission = undefined;
   try { recoverOrphanedResponseSpills(ownedSpillFileNames()); } catch { /* best effort */ }
+}
+
+/** Best-effort lazy load so durable previous_response_id chains can survive a restart. */
+function ensureLoaded(): boolean {
+  if (loaded) return true;
+  const path = snapshotPath();
+  const result = loadSnapshotEntries(path, SNAPSHOT_FILE_MAX_BYTES, snapshotLoadStore);
+  if (result.failed) return false;
+  recoverSnapshotTemps(path);
+  finishSnapshotLoad(result.oversized);
   pruneResponses();
+  return true;
 }
 
 /** Every file name the process still needs: live stubs, deferred unlinks, and queued publications. */
@@ -735,7 +726,7 @@ type SnapshotWriteOutcome = "stable" | "unstable" | "failed";
 async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise<SnapshotWriteOutcome> {
   try {
     for (let attempt = 0; attempt < attemptLimit; attempt += 1) {
-      const revision = stateRevision;
+      const revision = durableRevision;
       const payload = snapshotPayload(selectSnapshotEntries(states, snapshotTotalBytes(), SNAPSHOT_ENTRY_MAX_BYTES));
       const payloadBytes = Buffer.byteLength(payload, "utf8");
       const payloadDigest = Bun.hash(payload).toString(36);
@@ -769,7 +760,7 @@ async function writeBoundedSnapshot(path: string, attemptLimit: number): Promise
         lastSnapshotTarget = resolveWriteTarget(path);
       }
       persistAttemptHookForTests?.();
-      if (revision === stateRevision) {
+      if (revision === durableRevision) {
         // Cancel only the timer whose mutation this stable revision includes,
         // before an awaiting caller's microtask can record a newer revision.
         if (persistTimer) clearTimeout(persistTimer);
@@ -842,7 +833,9 @@ async function persistNow(path: string, awaitFollowUp = false): Promise<void> {
   }
 }
 
-function schedulePersist(): void {
+function noteDurableMutation(): void {
+  durableRevision += 1;
+  if (!loaded) return;
   // Resolve the target path NOW: tests (and anything else) may swap OPENCODEX_HOME before the
   // debounce fires, and a late write must land in the home that owned the recorded state.
   schedulePersistAt(snapshotPath());
@@ -950,25 +943,44 @@ function enforceSpilledResponseBudget(requiredHeadroomBytes?: number): number {
   return before - spilledBytes;
 }
 
-function pruneResponses(at = now()): void {
+function responseExpiryCutoff(at: number): number {
+  return at - RESPONSE_TTL_MS;
+}
+
+function deleteExpiredEntries(at: number): number {
+  const cutoff = responseExpiryCutoff(at);
+  let removed = 0;
   for (const [id, state] of states) {
-    if (at - state.createdAt > RESPONSE_TTL_MS) deleteEntry(id);
+    if (state.createdAt >= cutoff && !connectionScopeEntryExpired(state, at)) continue;
+    deleteEntry(id);
+    removed += 1;
   }
+  return removed;
+}
+
+function pruneResponses(at = now()): void {
+  deleteExpiredEntries(at);
   while (states.size > MAX_STORED_RESPONSES) {
-    const oldest = states.keys().next().value;
-    if (!oldest) break;
+    const oldest = oldestConnectionScopeResident(states, spillQueueHoldsResidentCandidate) ?? states.keys().next().value;
+    if (oldest === undefined) break;
     deleteEntry(oldest);
   }
   // Unconditional RAM cap. Resident payloads demote durably; stubs/tombstones are
   // deleted only when even their bounded metadata cannot fit the override.
   while (storedResponseBytes > byteCap() && states.size > 0) {
+    // Memory-only connection residents drop before any durable entry pays a disk demotion.
+    const connectionOldest = oldestConnectionScopeResident(states, spillQueueHoldsResidentCandidate);
+    if (connectionOldest !== undefined) {
+      deleteEntry(connectionOldest);
+      continue;
+    }
     const oldestResident = [...states].find(([id, entry]) => entry.kind === "resident"
       && !spillQueueHoldsResidentCandidate(id, entry));
     const hasPendingResident = !oldestResident && [...states].some(([id, entry]) => entry.kind === "resident"
       && spillQueueHoldsResidentCandidate(id, entry));
     if (hasPendingResident) break;
     const oldestId = oldestResident?.[0] ?? states.keys().next().value as string | undefined;
-    if (!oldestId) break;
+    if (oldestId === undefined) break;
     const entry = states.get(oldestId)!;
     if (entry.kind !== "resident") {
       deleteEntry(oldestId);
@@ -999,16 +1011,10 @@ function pruneResponses(at = now()): void {
 
 /** Periodic TTL-only sweep; count/byte eviction remains owned by mutation paths. */
 export function sweepExpiredResponseStates(at = now()): number {
-  let removed = 0;
-  for (const [id, state] of states) {
-    if (at - state.createdAt <= RESPONSE_TTL_MS) continue;
-    deleteEntry(id);
-    removed += 1;
-  }
+  const removed = deleteExpiredEntries(at);
   // The disk ceiling needs a caller that does not depend on traffic. The return
   // value stays the TTL count so this function's existing contract is unchanged.
-  const reclaimed = enforceSpilledResponseBudget();
-  if (removed > 0 || reclaimed > 0) schedulePersist();
+  enforceSpilledResponseBudget();
   return removed;
 }
 
@@ -1025,18 +1031,16 @@ export function responseContinuationRetainedStoreSnapshot(): RetainedStoreSnapsh
     bytes,
     evictableBytes,
     pinnedBytes: Math.max(0, bytes - evictableBytes),
-    oldestAt: oldestResidentAt,
+    oldestAt: budgetCandidate?.[1].createdAt ?? null,
   };
 }
 
 export function evictOldestResponseContinuationForBudget(): number {
-  if (oldestResidentId === undefined) return 0;
-  const id = oldestResidentId;
-  const entry = states.get(id);
-  if (!entry || entry.kind !== "resident") return 0;
+  if (!budgetCandidate) return 0;
+  const [id, entry] = budgetCandidate;
+  if (entry.connectionOwned === true) { deleteEntry(id); return entry.sizeBytes; }
   if (windowsSecretAclApplies()) {
     queuePendingResponseSpill(id, entry);
-    schedulePersist();
     return 0;
   }
   try {
@@ -1054,7 +1058,6 @@ export function evictOldestResponseContinuationForBudget(): number {
     noteSpillWriteFailure(error);
     replaceWithSpillFailure(id, entry);
   }
-  schedulePersist();
   const replacement = states.get(id);
   return !replacement || replacement.kind === "resident"
     ? 0
@@ -1081,7 +1084,6 @@ function materializeEntry(
           : "spill_corrupt",
     };
     replaceWithSpillFailure(id, entry);
-    schedulePersist();
     return { ok: false, failure };
   }
   if (entry.replayOwnerKey !== result.payload.replayOwnerKey || entry.clientThreadId !== result.payload.clientThreadId) {
@@ -1093,7 +1095,6 @@ function materializeEntry(
     || entry.providerOutputStart !== result.payload.providerOutputStart)) {
     spillCounters.readFailures += 1;
     replaceWithSpillFailure(id, entry);
-    schedulePersist();
     return { ok: false, failure: { code: "previous_response_not_found", reason: "spill_corrupt" } };
   }
   const state = measureResidentEntry(id, {
@@ -1110,7 +1111,6 @@ function materializeEntry(
   if (!state) {
     spillCounters.readFailures += 1;
     replaceWithSpillFailure(id, entry);
-    schedulePersist();
     return { ok: false, failure: { code: "previous_response_not_found", reason: "spill_corrupt" } };
   }
   return { ok: true, state };
@@ -1126,7 +1126,10 @@ export function expandPreviousResponseInput(
   const request = body as Record<string, unknown>;
   const previousId = typeof request.previous_response_id === "string" ? request.previous_response_id : undefined;
   if (!previousId) return body;
-  ensureLoaded();
+  if (!ensureLoaded()) {
+    if (replayOwnerKey !== undefined) replayFailures.set(request, { code: "previous_response_not_found", reason: "missing" });
+    return body;
+  }
   pruneResponses();
   const ephemeral = resolveEphemeralReplay(previousId, ephemeralScope, clientThreadId, replayOwnerKey);
   if (ephemeral.kind === "scope_mismatch") {
@@ -1137,10 +1140,10 @@ export function expandPreviousResponseInput(
     return body;
   }
   const previous = ephemeral.kind === "hit" ? ephemeral.state : states.get(previousId);
-  if (!previous) return body;
-  if (ephemeral.kind === "hit" && !replayScopeMatches(previous, clientThreadId, replayOwnerKey)) {
-    replayFailures.set(request, { code: "previous_response_not_found", reason: "scope_mismatch" });
-    replayScopeMismatchDrops += 1;
+  if (!previous) {
+    // Strict replay needs a local ownership proof even after a scoped entry was released.
+    // Legacy callers leave the owner undefined and retain their existing upstream continuation.
+    if (replayOwnerKey !== undefined) replayFailures.set(request, { code: "previous_response_not_found", reason: "missing" });
     return body;
   }
   // Authorize durable metadata before opening a spill or exposing provider state.
@@ -1208,7 +1211,7 @@ export function previousResponseConversationId(responseId: string | undefined): 
 
 export function previousResponseProviderState(responseId: string | undefined): OcxProviderContinuationState | undefined {
   if (!responseId) return undefined;
-  ensureLoaded();
+  if (!ensureLoaded()) return undefined;
   pruneResponses();
   const state = states.get(responseId);
   const providers = state?.kind === "spill-failed" ? undefined : state?.providers;
@@ -1262,14 +1265,15 @@ bindEphemeralReplayStore({
   now,
   inputItems,
   normalizedClientThreadId,
-  ensureLoaded,
   measureResidentEntry,
-  canReplace: (id: string, thread: string | undefined, owner: string | null | undefined) => {
+  canReplace: (id, thread, owner, connectionScope) => {
+    if (connectionScope && !connectionReplayScopeAcceptsEntry(connectionScope, id, owner, thread)) return false;
+    if (!connectionScope && !ensureLoaded()) return false;
     const entry = states.get(id);
-    return !entry || entry.kind === "spill-failed" || replayScopeMatches(entry, thread, owner);
+    return !entry || entry.kind === "spill-failed" || replayScopeMatches(entry, thread, owner)
+      || (!connectionScope && validReplayOwnerKey(owner) && isConnectionOwnedResponseState(entry));
   },
   setResidentEntry,
-  schedulePersist,
   validReplayOwnerKey,
   replayScopeMatches,
 });
@@ -1300,12 +1304,12 @@ export function clearResponseStateMemoryForTests(): void {
   resetEphemeralReplayForTests();
   resetSpillQueueForTests();
   resetPeriodicSpillSweepCursorForTests();
+  for (const [id, entry] of states) forgetConnectionScopeEntry(id, entry);
   states.clear();
   storedResponseBytes = 0;
   residentResponseBytes = 0;
-  oldestResidentId = undefined;
-  oldestResidentAt = null;
-  stateRevision = 0;
+  budgetCandidate = undefined;
+  durableRevision = 0;
   pendingSpillUnlinks.length = 0;
   resetSpillCountersForTests();
   spillWriteHealth.consecutiveFailures = 0;
@@ -1320,6 +1324,7 @@ export function clearResponseStateMemoryForTests(): void {
   lastSnapshotDigest = null;
   lastSnapshotTarget = null;
   loaded = false;
+  coldSnapshotAdmission = undefined;
 }
 
 export function clearResponseStateForTests(): void {

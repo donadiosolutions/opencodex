@@ -137,7 +137,7 @@ export function selectDriftHealCatalogPath(
 
 /** Repair only the missing config roots; catalog convergence remains the later tick step. */
 async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number): Promise<"none" | "healed" | "not-healed"> {
-  const [{ codexConfigDrift }, { JOURNAL_PATH, journaledInjectedCatalogPath, journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl, journaledInjectedRootValues }, { shouldSyncCodexOnStart }, { injectCodexConfig }, { DEFAULT_CATALOG_PATH, resolveCodexConfigPath }, { loadConfig }, { inspectNativeCodexOwnership }] =
+  const [{ codexConfigDrift }, { JOURNAL_PATH, journaledOwnedCatalogBinding, journaledInjectedOpenaiBaseUrl, journaledInjectedRealtimeWsBaseUrl, journaledInjectedRootValues }, { shouldSyncCodexOnStart }, { injectCodexConfig }, { CODEX_CONFIG_PATH, DEFAULT_CATALOG_PATH, resolveCodexCatalogPath, sameCodexCatalogPath }, { loadConfig }, { inspectNativeCodexOwnership }] =
     await Promise.all([
       import("./config-drift-heal"),
       import("./journal"),
@@ -151,10 +151,12 @@ async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number):
   const current = () => entryGeneration === generation && JSON.stringify(loadConfig()) === capturedSettings;
   if (!current()) return "none";
   if (!shouldSyncCodexOnStart(config)) return "none";
+  const catalogBinding = journaledOwnedCatalogBinding({ readOnly: true });
   const journaled = {
     injectedOpenaiBaseUrl: journaledInjectedOpenaiBaseUrl({ readOnly: true }),
     injectedRealtimeWsBaseUrl: journaledInjectedRealtimeWsBaseUrl({ readOnly: true }),
-    injectedCatalogPath: journaledInjectedCatalogPath(),
+    injectedCatalogPath: catalogBinding && !sameCodexCatalogPath(CODEX_CONFIG_PATH, catalogBinding, DEFAULT_CATALOG_PATH)
+      ? catalogBinding : null,
     injectedRootValues: {
       openai_base_url: journaledInjectedRootValues("openai_base_url", { readOnly: true }),
       experimental_realtime_ws_base_url: journaledInjectedRootValues("experimental_realtime_ws_base_url", { readOnly: true }),
@@ -167,7 +169,9 @@ async function healCodexConfigDrift(config: OcxConfig, entryGeneration: number):
   if (!current()) return "none";
   const runtime = readRuntimePort(process.pid);
   if (!runtime) return "not-healed";
-  const catalogPath = selectDriftHealCatalogPath(JOURNAL_PATH, DEFAULT_CATALOG_PATH, resolveCodexConfigPath);
+  const catalogPath = selectDriftHealCatalogPath(
+    JOURNAL_PATH, DEFAULT_CATALOG_PATH, path => resolveCodexCatalogPath(CODEX_CONFIG_PATH, path),
+  );
   if (!current()) return "none";
   // Keep the missing routing roots visible to the next tick. Catalog-only convergence below
   // may recreate the file now, but it does not re-inject config.toml in this tick.

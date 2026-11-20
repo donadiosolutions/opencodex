@@ -1,6 +1,5 @@
 // Holds INV-TOML-01 from structure/overview.md; keep the id here if this file is split or renamed.
 import { existsSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { contextCompatibleBaseLine } from "../context-compat";
 import { resolveEffectiveProjectModelProvider } from "../project-config-warnings";
 import {
@@ -15,8 +14,9 @@ import {
 } from "../injected-marker";
 import {
   CODEX_CONFIG_PATH,
-  DEFAULT_CATALOG_PATH,
-  resolveCodexConfigPath,
+  defaultCodexCatalogPathForConfig,
+  resolveCodexCatalogPath,
+  sameCodexCatalogPath,
   tomlString,
 } from "../paths";
 import { normalizeStructuralWhitespace, rootAssignmentKey, rootSourceLines, sourceAssignment, sourceAssignmentSpan, sourceText, type SourceLine } from "../toml-source-lines";
@@ -494,43 +494,64 @@ export function setRootModelProvider(content: string): string {
   return insertRootSourceLines(content, ['model_provider = "opencodex"']);
 }
 
-function readRootModelCatalogPath(content: string): string | null {
-  const { lines, rootEnd } = rootSourceLines(content);
-  let ownedCatalogPath: string | null = null;
-  for (let index = 0; index < rootEnd; index += 1) {
-    if (!lines[index].structural) continue;
-    const catalogPath = rootTomlString(lines[index].text, "model_catalog_json");
-    if (catalogPath === null) continue;
-    if (!isOpencodexCatalogPath(catalogPath)) return catalogPath;
-    ownedCatalogPath ??= catalogPath;
-  }
-  return ownedCatalogPath;
+interface CatalogBindingOwner {
+  configPath?: string;
+  journaledPath?: string | null;
 }
 
-export function setRootModelCatalogPath(content: string, catalogPath: string): string {
-  const { bom, lines, rootEnd } = rootSourceLines(content);
-  const key = `model_catalog_json = ${tomlString(catalogPath)}`;
-  const ownedAssignments: number[] = [];
-  let hasUserAssignment = false;
+function ownedCatalogPath(binding: string, owner: CatalogBindingOwner): string | null {
+  const configPath = owner.configPath ?? CODEX_CONFIG_PATH;
+  const defaultPath = defaultCodexCatalogPathForConfig(configPath);
+  if (sameCodexCatalogPath(configPath, binding, defaultPath)) return defaultPath;
+  const journaled = owner.journaledPath;
+  return journaled && sameCodexCatalogPath(configPath, binding, journaled)
+    ? resolveCodexCatalogPath(configPath, journaled) : null;
+}
+
+function* catalogAssignments(lines: SourceLine[], rootEnd: number) {
   for (let i = 0; i < rootEnd; i++) {
     if (!lines[i].structural || rootAssignmentKey(lines[i].text) !== "model_catalog_json") continue;
-    const existing = rootTomlString(lines[i].text, "model_catalog_json");
-    if (existing !== null && isOpencodexCatalogPath(existing)) {
-      ownedAssignments.push(i);
+    const assignment = sourceAssignment(lines, i, rootEnd);
+    const value = assignment?.value;
+    yield { start: i, end: assignment?.end ?? i + 1, binding: typeof value === "string" ? value : null };
+  }
+}
+
+function readRootModelCatalogPath(content: string, owner: CatalogBindingOwner): string | null {
+  const { lines, rootEnd } = rootSourceLines(content);
+  let owned: string | null = null;
+  for (const { binding } of catalogAssignments(lines, rootEnd)) {
+    if (binding === null) continue;
+    if (!ownedCatalogPath(binding, owner)) return binding;
+    owned ??= binding;
+  }
+  return owned;
+}
+
+export function updateRootModelCatalogPath(content: string, binding: string | null, owner: CatalogBindingOwner = {}):
+  { content: string; injectedBinding: string | null } {
+  const { bom, lines, rootEnd } = rootSourceLines(content);
+  const ownedLines = new Set<number>();
+  let hasUserAssignment = false;
+  for (const existing of catalogAssignments(lines, rootEnd)) {
+    if (existing.binding && ownedCatalogPath(existing.binding, owner)) {
+      for (let line = existing.start; line < existing.end; line++) ownedLines.add(line);
     } else {
       hasUserAssignment = true;
     }
   }
-  if (hasUserAssignment) {
-    const owned = new Set(ownedAssignments);
-    return bom + sourceText(lines.filter((_, index) => !owned.has(index)));
+  const injectedBinding = hasUserAssignment ? null : binding;
+  const kept = lines.filter((_, i) => !ownedLines.has(i));
+  if (injectedBinding === null) return { content: bom + sourceText(kept), injectedBinding };
+
+  const key = "model_catalog_json = " + tomlString(injectedBinding);
+  const firstOwned = ownedLines.values().next().value;
+  if (firstOwned === undefined) {
+    return { content: insertRootSourceLines(content, [key]), injectedBinding };
   }
-  if (ownedAssignments.length > 0) {
-    lines[ownedAssignments[0]].text = key;
-    const duplicates = new Set(ownedAssignments.slice(1));
-    return bom + sourceText(lines.filter((_, index) => !duplicates.has(index)));
-  }
-  return insertRootSourceLines(content, [key]);
+  const eol = lines[firstOwned].eol;
+  kept.splice(firstOwned, 0, { text: key, eol, structural: true });
+  return { content: bom + sourceText(kept), injectedBinding };
 }
 
 export function removeProfileSection(content: string): string {
@@ -601,43 +622,29 @@ export function ensureFastModeFeature(content: string, fastMode?: boolean): stri
 }
 
 export function isOpencodexCatalogPath(path: string): boolean {
-  const candidate = resolve(resolveCodexConfigPath(path));
-  const generated = resolve(DEFAULT_CATALOG_PATH);
-  return process.platform === "win32"
-    ? candidate.toLowerCase() === generated.toLowerCase()
-    : candidate === generated;
+  return ownedCatalogPath(path, {}) !== null;
 }
 
-function userCatalogOverridePath(catalogPath?: string | null): string | null {
-  return catalogPath && !isOpencodexCatalogPath(catalogPath)
-    ? catalogPath
-    : null;
+function userCatalogOverridePath(catalogPath?: string | null, owner: CatalogBindingOwner = {}): string | null {
+  return catalogPath && !ownedCatalogPath(catalogPath, owner) ? catalogPath : null;
 }
 
-export function stripOpencodexCatalogPath(content: string): string {
-  const { bom, lines, rootEnd } = rootSourceLines(content);
-  return bom + sourceText(lines
-    .filter((line, index) => {
-      if (index >= rootEnd || !line.structural) return true;
-      const path = rootTomlString(line.text, "model_catalog_json");
-      return path === null || !isOpencodexCatalogPath(path);
-    }));
+export function stripOpencodexCatalogPath(content: string, owner: CatalogBindingOwner = {}): string {
+  return updateRootModelCatalogPath(content, null, owner).content;
 }
 
 /** Apply only a user-owned static catalog override; generated catalogs stay on the protocol. */
 export function applyCodexCatalogOverride(
   content: string,
   selectedCatalogPath?: string | null,
-): { content: string; overridePath: string | null } {
-  const overridePath =
-    userCatalogOverridePath(readRootModelCatalogPath(content)) ??
-    userCatalogOverridePath(selectedCatalogPath);
-  return {
-    content: overridePath
-      ? setRootModelCatalogPath(content, overridePath)
-      : stripOpencodexCatalogPath(content),
-    overridePath,
-  };
+  owner: CatalogBindingOwner = {},
+): { content: string; overridePath: string | null; injectedBinding: string | null } {
+  const existing = userCatalogOverridePath(readRootModelCatalogPath(content, owner), owner);
+  const selected = userCatalogOverridePath(selectedCatalogPath);
+  // Keep each user binding as written. Owned legacy bindings are removed, except
+  // when an explicitly selected alternate catalog still uses that binding.
+  const result = updateRootModelCatalogPath(content, existing ? null : selected, owner);
+  return { ...result, overridePath: existing ?? result.injectedBinding };
 }
 
 export function buildProfileFile(port: number, catalogPath?: string | null, supportsWebsockets?: boolean, includeApiAuthHeader?: boolean, hostname?: string, fastMode?: boolean): string;
@@ -797,44 +804,26 @@ function topLevelTableNamesOf(content: string): Set<string> {
 export function chooseCatalogPathForInjection(
   content: string,
   requested?: string | null,
+  owner: CatalogBindingOwner = {},
 ): string | null {
-  if (requested !== undefined) return requested;
+  const configPath = owner.configPath ?? CODEX_CONFIG_PATH;
+  if (requested !== undefined) return requested ? resolveCodexCatalogPath(configPath, requested) : null;
 
-  const existing = readRootModelCatalogPath(content);
+  const existing = readRootModelCatalogPath(content, owner);
   if (existing) {
-    const resolved = resolveCodexConfigPath(existing);
-    if (!isOpencodexCatalogPath(resolved) || existsSync(resolved))
-      return existing;
+    const owned = ownedCatalogPath(existing, owner);
+    if (!owned) return resolveCodexCatalogPath(configPath, existing);
+    if (existsSync(owned)) return owned;
   }
 
-  return existsSync(DEFAULT_CATALOG_PATH) ? DEFAULT_CATALOG_PATH : null;
+  const defaultPath = defaultCodexCatalogPathForConfig(configPath);
+  return existsSync(defaultPath) ? defaultPath : null;
 }
 
-/**
- * The effective `model_catalog_json` is one of ours and the file is gone.
- *
- * Codex does not degrade on this: a catalog path it cannot read stops it loading its
- * configuration at all, which looks exactly like the routing lockout in #5261 and is what the
- * reporter's machine was left in after the catalog file was deleted by hand.
- *
- * Injection already repairs it — the chooser refuses a missing owned path and the caller strips
- * the stale line. That only helps someone who runs opencodex again, and the whole difficulty of
- * this state is that Codex is the thing that stopped working, so nothing prompts them to. This
- * predicate exists so the CLI can say it out loud.
- *
- * A user-owned catalog assignment wins here exactly as it does during injection: if they named
- * the file, its absence is theirs to explain, and we do not claim it.
- *
- * Ownership is decided by basename, which is a weak test — a file the user happens to name
- * `opencodex-catalog.json` is read as ours wherever it sits. That is deliberate rather than
- * overlooked: it is the same test injection already applies, and a detector that drew the line
- * somewhere else would report a state injection would then treat differently. Tightening it is a
- * change to injection, not to this.
- */
-export function missingOwnedCatalogPath(content: string): string | null {
-  const existing = readRootModelCatalogPath(content);
-  if (!existing) return null;
-  const resolved = resolveCodexConfigPath(existing);
-  if (!isOpencodexCatalogPath(resolved)) return null;
-  return existsSync(resolved) ? null : existing;
+/** Diagnose a missing default catalog, which prevents Codex from loading the config (#5261). */
+export function missingOwnedCatalogPath(content: string, configPath = CODEX_CONFIG_PATH): string | null {
+  const owner = { configPath };
+  const existing = readRootModelCatalogPath(content, owner);
+  const owned = existing ? ownedCatalogPath(existing, owner) : null;
+  return owned && !existsSync(owned) ? owned : null;
 }

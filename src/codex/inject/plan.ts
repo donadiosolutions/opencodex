@@ -21,10 +21,11 @@ import {
   journaledInjectedRootValues,
   journaledInjectedRootWebSearch,
   journaledInjectedSubagentDefaults,
+  journaledOwnedCatalogBinding,
   journaledReplacedRootWebSearch,
 } from "../journal";
 import { REALTIME_WS_BASE_URL_KEY, stripJournaledOpenaiBaseUrl } from "../injected-marker";
-import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, resolveCodexStateDbPath } from "../paths";
+import { CODEX_CONFIG_PATH, CODEX_PROFILE_PATH, codexCatalogBindingForPath, resolveCodexCatalogPath, resolveCodexStateDbPath } from "../paths";
 import { transformManagedSubagentDefaults, type WrittenSubagentDefaults } from "../subagent-defaults";
 import type { OcxConfig } from "../../types";
 import type { CodexWriteCandidate } from "../write-coordination";
@@ -86,6 +87,7 @@ export interface CodexInjectionPlanOk {
   profileSource: string | null;
   /** The resolved catalog path, never the raw option. */
   catalogPath: string | null;
+  injectedCatalogBinding: string | null;
   providerTableMode: boolean;
   keepRootOverrideAlongsideTable: boolean;
   keptUserBaseUrl: boolean;
@@ -226,12 +228,10 @@ export function deriveCodexInjectionPlan(
   );
   content = webSearch.content;
 
-  const catalogPath = chooseCatalogPathForInjection(
-    content,
-    ctx.catalogPathOption,
-  );
-  const catalogOverride = applyCodexCatalogOverride(content, catalogPath);
-  content = catalogOverride.content;
+  const catalogOwner = { journaledPath: journaledOwnedCatalogBinding({ readOnly: ctx.journalReadOnly }) };
+  const catalogPath = chooseCatalogPathForInjection(content, ctx.catalogPathOption, catalogOwner);
+  const catalog = applyCodexCatalogOverride(content, catalogPath, catalogOwner);
+  content = catalog.content;
 
   // Provider-table form: non-loopback admission or an explicit Desktop policy.
   const providerTableMode = usesProviderTable(routingTarget);
@@ -343,7 +343,7 @@ export function deriveCodexInjectionPlan(
     profileSource,
     buildProfileFileForTarget(
       routingTarget,
-      catalogOverride.overridePath,
+      catalog.overridePath && codexCatalogBindingForPath(CODEX_PROFILE_PATH, resolveCodexCatalogPath(CODEX_CONFIG_PATH, catalog.overridePath)),
       websocketsForRoutingTarget(config, routingTarget),
       config?.fastMode,
       config?.codexProviderDisplayName,
@@ -426,6 +426,7 @@ export function deriveCodexInjectionPlan(
     profileContent,
     profileSource,
     catalogPath,
+    injectedCatalogBinding: catalog.injectedBinding,
     providerTableMode,
     keepRootOverrideAlongsideTable,
     keptUserBaseUrl,

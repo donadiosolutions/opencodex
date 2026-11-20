@@ -1,6 +1,7 @@
 import { isolateCodexPoolAccountHeaders } from "../codex/forward-transport-headers";
 import { isUntypedBareUpstreamError } from "./bare-upstream-error";
 import type { NativeResponseControl } from "./responses/native-response-control";
+import type { ConnectionReplayScope } from "../responses/state/connection-scope";
 import type { HandleResponsesOptions } from "./responses/core-options";
 import type { ServerWebSocket } from "bun";
 import { responsesJsonEventSequence } from "./responses-json-events";
@@ -21,6 +22,7 @@ import { AGENT_ASSERTION_HEADER } from "../lib/authorization-scheme";
 import { classifyUsageClient, type UsageClient } from "../usage/client";
 import { sessionLaneIdFromRequest } from "./request-log-conversation";
 import { isProxyError } from "../lib/client-error-body";
+import { responsesCompletionError } from "../lib/errors";
 import { WORKFLOW_LOCAL_REFUSAL_HEADER } from "../lib/workflow-budget";
 import { NativeContinuationRefusalError } from "./responses/native-continuation-refusal";
 import { LINK_WS_LIMITS, linkPumpTimer, linkPumpWaitObserver } from "./index/link-websocket-limits";
@@ -80,11 +82,23 @@ export interface WsData {
   agentTaskRecoveryApiKeyHeaderPresent?: boolean;
   /** Local-only loopback replay identity; revalidated each turn without retaining its secret. */
   replayPrincipal?: HandleResponsesOptions["replayPrincipal"];
+  /**
+   * Server-minted connection replay scope for an unidentified loopback socket
+   * (src/responses/state/connection-scope.ts): opaque, memory-only, bound to the
+   * handshake's own thread-id and released on socket close. Not a credential and
+   * never visible to the client.
+   */
+  replayScope?: ConnectionReplayScope;
   authContext?: CodexAuthContext; // last resolved account decision for observability/registry cleanup
   cancel?: () => void; // cancels the in-flight stream reader/fetch
   turnId?: number; // monotonically increasing per socket; prevents stale frames after replacement turns
   /** Fixed-size logical session lane derived at the HTTP upgrade boundary. */
   sessionLaneId?: string;
+  /**
+   * The upgrade came from a loopback peer on a local listener (src/lib/request-peer-scope.ts).
+   * Fixed at the handshake; only `true` counts as local, so an absent value is denied.
+   */
+  readonly peerLocal?: boolean;
   /** Discriminator: Responses reframing vs transparent live/realtime sideband relay. */
   kind?: "responses" | "live-sideband" | "remote-workspace-agent";
   remoteWorkspaceConnection?: { receive(raw: string | Uint8Array): void };
@@ -177,6 +191,7 @@ export function buildResponsesWsData(
   clientHeaders?: Headers,
   client?: UsageClient,
   replayPrincipal?: HandleResponsesOptions["replayPrincipal"],
+  replayScope?: ConnectionReplayScope,
 ): WsData {
   // Admission rides with the handshake. A retained replay principal is revalidated
   // per turn when filtered headers cannot reconstruct its original identity.
@@ -189,6 +204,7 @@ export function buildResponsesWsData(
     connectionId: `ws_${crypto.randomUUID()}`,
     requestSequenceOnConnection: 0,
     ...(replayPrincipal ? { replayPrincipal } : {}),
+    ...(replayScope ? { replayScope } : {}),
     ...(client ? { client } : {}),
     ...(admissionLease ? { admissionLease } : {}),
     ...(sessionLaneId ? { sessionLaneId } : {}),
@@ -297,19 +313,10 @@ export function buildWsErrorFrame(
   };
 }
 
-function payloadType(payload: string): string | null {
-  try {
-    const json = JSON.parse(payload) as { type?: unknown };
-    return typeof json.type === "string" ? json.type : null;
-  } catch {
-    return null;
-  }
-}
-
-function terminalStatusFromType(type: string): ResponsesTerminalStatus | null {
+function terminalStatusFromType(type: string, payload: unknown): ResponsesTerminalStatus | null {
   switch (type) {
     case "response.completed":
-      return "completed";
+      return responsesCompletionError(payload) == null ? "completed" : "failed";
     case "response.failed":
       return "failed";
     case "response.incomplete":
@@ -432,11 +439,10 @@ export async function pumpResponsesSseToWebSocket(
   const handlePayload = (payload: string): boolean => {
     if (!isCurrent()) return true;
     if (payload === "[DONE]") return false;
-    const type = payloadType(payload);
-    let untypedBare = false;
-    if (!type) {
-      try { untypedBare = isUntypedBareUpstreamError(JSON.parse(payload)); } catch { /* protocol error below */ }
-    }
+    let parsed: { type?: unknown } | undefined;
+    try { parsed = JSON.parse(payload); } catch { /* protocol error below */ }
+    const type = typeof parsed?.type === "string" ? parsed.type : null;
+    const untypedBare = !type && isUntypedBareUpstreamError(parsed);
     // A relayed stream follows an untyped envelope with its own response.failed, so the envelope
     // waits for it. A raw upstream body has no such tail: the envelope stays the protocol error
     // it always was and is not recorded as a verdict the client never received.
@@ -460,7 +466,7 @@ export async function pumpResponsesSseToWebSocket(
     sendTextFrame(ws, payload);
     observeDelivery(options.onFrameSent, type, payload);
     if (options.untilEof && type === "response.created") lastTerminal = undefined;
-    const terminalStatus = type === "error" && options.untilEof ? "failed" : terminalStatusFromType(type);
+    const terminalStatus = type === "error" && options.untilEof ? "failed" : terminalStatusFromType(type, parsed);
     if (terminalStatus) {
       if (options.untilEof) { lastTerminal = terminalStatus; return false; }
       reportTerminal(terminalStatus);

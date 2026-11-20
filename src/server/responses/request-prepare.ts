@@ -1,19 +1,18 @@
-import { responseReplayOwnerKey } from "../../responses/state/replay-owner";
+import { selectResponseReplayOwner } from "./replay-owner";
 import { isPlaintextV2AgentMessagesEnabled } from "../../config/multi-agent-surface";
 import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import { attributePhysicalAttempt } from "../request-log-failure-attribution";
 import { failLinkTurnExpansion, markLinkTurnMissing, observeLinkTurnExpansion } from "../link-turn";
 import { inputAdmissionRefusalMessage } from "./input-admission";
 import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-destination";
 import { markProxyError } from "../../lib/client-error-body";
 import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session";
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
-import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
-import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
-import { nativeMessagesToolScopeDenial } from "../messages-native-scope";
+import { addProtocolEntryReason } from "../../protocols/trace";
+import { admitsHostedAdvisor, scopedAnthropicServerTools } from "../messages-native-scope";
 import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
-import { isAntigravityRoute } from "../antigravity-direct-eligibility";
-import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
+import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryReplayScope,
   agentTaskRecoveryConfig,
@@ -97,23 +96,30 @@ import { configuredAnthropicInstance } from "../../providers/anthropic-instance"
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { bindTurnTerminationScope, rememberDeliveredFinalAnswer } from "../../responses/turn-termination";
 import {
+  beginRequestAttempt,
+  finishRequestAttempt,
+  markLocalRequestLogRefusal,
+  noteAttemptSend,
   noteCodexSelectionAffinity,
   observeCacheDiagnosticInbound,
   rebindCacheDiagnosticBody,
   requestLogSpeedLabel,
   readConfiguredCodexEffort,
   readConfiguredCodexServiceTier,
+  usageFromResponsesPayload,
 } from "../request-log";
+import type { PersistedUsageAttempt } from "../../usage/log";
 import type { RouteResult } from "../../router";
 import {
   captureRouteStaticPolicy,
+  previewRouteModel,
   routeConcreteModel,
   routeCompactionModel,
   routeModel,
   NoEligiblePolicyCandidateError,
   AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
-import { evidenceFromBody } from "../../routing/request-evidence";
+import { resolvePolicyProfileId } from "../../routing/profile";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
 import { isThreadSpawnRequest } from "../effort-policy";
@@ -216,47 +222,7 @@ import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { codexTurnStartsNewHistory } from "../../adapters/anthropic/per-message-effort";
 
-/** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
-function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
-  return options.directRequest?.evidence ?? evidenceFromBody(parsed._rawBody);
-}
-
-/**
- * Leave the Antigravity direct lane for this request: put the bridge conversation back on the
- * Responses body so every `_rawBody` reader sees what the bridge would have sent, and trace the
- * request as the bridge. The IR conversation already decoded stays: it equals what
- * `parseRequest` builds from the restored body (`tests/protocols/chat-ir-parity.test.ts`).
- */
-function restoreDirectRequestConversation(options: HandleResponsesOptions, body: unknown, logCtx: RequestLogContext): void {
-  const direct = options.directRequest;
-  if (!direct) return;
-  options.directRequest = undefined;
-  if (body && typeof body === "object" && !Array.isArray(body)) Object.assign(body, direct.bridgeConversation());
-  if (options.clientEncoder) options.clientEncoder = { ...options.clientEncoder, requestLane: "bridge" };
-  markProtocolEntry(logCtx, {
-    inbound: direct.protocol,
-    lane: "bridge",
-    reasonCodes: ["not-migrated"],
-    features: protocolMarkFeatures(logCtx) ?? [],
-  });
-}
-
-/**
- * Leave the direct lane as soon as the route stops being the Antigravity route it was decided
- * for. Called after every route assignment, so readers that run between a reroute and dispatch
- * (canonical sanitization, ciphertext stripping, final normalization) see the bridge body.
- */
-function leaveDirectLaneIfRerouted(
-  options: HandleResponsesOptions,
-  route: Pick<RouteResult, "providerName" | "modelId" | "provider">,
-  parsed: OcxParsedRequest,
-  logCtx: RequestLogContext,
-): void {
-  const direct = options.directRequest;
-  if (!direct) return;
-  if (route.providerName === direct.providerName && route.modelId === direct.modelId && isAntigravityRoute(route)) return;
-  restoreDirectRequestConversation(options, parsed._rawBody, logCtx);
-}
+import { leaveDirectLaneIfRerouted, restoreDirectRequestConversation, routeEvidence } from "./request-prepare-direct-lane";
 
 /** Parses, selects, and admits one request without changing the dispatch policy. */
 export async function prepareResponsesRequest(
@@ -309,11 +275,8 @@ export async function prepareResponsesRequest(
       transport: options.inboundTransport === "websocket" ? "websocket" : undefined,
     });
   }
-  // Codex's memory pipeline names a destination per phase. The phase is read from Codex's own turn
-  // metadata, never from the model id: Phase 1 shares `gpt-5.6-luna` with the app's title/commit
-  // helper calls. Read here, ahead of the shadow intercept below, because the phase decision is the
-  // more specific of the two settings and must be the one that survives when both match one request.
-  // A JEV decision-model call is the router's own auxiliary turn, never a Codex memory phase.
+  // Read Codex's memory phase before shadow interception so the more specific route wins.
+  // JEV decision calls do not participate in memory-phase routing.
   const memoryModelPhase = options.internalDecisionCall ? undefined : options.memoryModelPhase
     ?? ((config.memoryModels?.extract || config.memoryModels?.consolidation)
       && !concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses"
@@ -371,16 +334,8 @@ export async function prepareResponsesRequest(
       }
     }
   }
-  // A shadow-call replacement that names a COMBO is routing policy, not the identity of any
-  // one pick. The late intercept site below resolves it through routeModel/tryPickComboModel,
-  // which collapses the table to a single target while still tagging `routeKind: "combo"`, so
-  // the combo gate on the next line never fires, handleComboResponses never runs, and 429/5xx
-  // hops — which only exist inside that loop — are unreachable (#4129). Rewrite the selector
-  // here instead, before comboIdFromRawBody reads `model`, and identify the combo by CONFIG
-  // LOOKUP so the check can never observe a one-candidate collapse.
-  // A memory target that names a combo has to reach the combo dispatcher as `model`, or its own
-  // failover loop is unreachable (#4129) — the same reason the shadow intercept rewrites its combo
-  // target here. Every other target is resolved at the late site, where the admission scope exists.
+  // Rewrite memory and shadow combo selectors before dispatch to preserve their failover ladders (#4129).
+  // Resolve ordinary targets later, once the admission scope exists.
   let memoryModelComboRouted = false;
   if (memoryModelApplies && memoryModelTarget && body && typeof body === "object" && !Array.isArray(body)) {
     const memoryComboId = resolveComboId(config, memoryModelTarget.model);
@@ -414,12 +369,7 @@ export async function prepareResponsesRequest(
       }
     }
   }
-  // The hard-lock fallback owns ordinary turns only, and only after every more specific
-  // routing setting had its chance above: a shadow-intercepted, memory-phased, compaction
-  // or decision turn keeps its own destination, and an intercepted combo selector is
-  // already owned by the intercept. A spawned sub-agent turn names its model on purpose,
-  // the same reason the shadow intercept leaves it alone. Like the sites above it, this
-  // must run before comboIdFromRawBody reads `model`.
+  // Reserve hard-lock fallback for ordinary turns without a more specific route.
   if (!concreteSelection && !options.compactionRoutingOverride && !isCompactionTrigger && !options.internalDecisionCall
     && !shadowCallIntercepted && !shadowCallMatches && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
     try {
@@ -466,7 +416,7 @@ export async function prepareResponsesRequest(
   const replayPrincipal = options.replayPrincipal
     ? options.replayPrincipal.clientPrincipalId : resolveContextPrincipal(req, config, options.admission);
   const strictReplay = options.plaintextV2Decision ?? isPlaintextV2AgentMessagesEnabled(config);
-  const replayOwnerKey = strictReplay ? responseReplayOwnerKey(replayPrincipal, inboundOwnThreadId) : undefined;
+  const { replayOwnerKey, replayConnectionScope } = selectResponseReplayOwner(strictReplay, replayPrincipal, inboundOwnThreadId, options);
   const replayThreadId = strictReplay ? inboundOwnThreadId : inboundClientThreadId;
   const cursorClientThreadId = codexPoolAffinityKey(req.headers);
   const ephemeralReplayScope = agentTaskRecovery && isThreadSpawnRequest(req.headers)
@@ -483,16 +433,41 @@ export async function prepareResponsesRequest(
   } else {
     body = expandPreviousResponseInput(body, replayThreadId, replayOwnerKey, ephemeralReplayScope);
     const replayFailure = previousResponseReplayFailure(body);
-    if (replayFailure?.reason === "scope_mismatch") {
+    if (replayFailure?.reason === "scope_mismatch" || replayFailure?.reason === "ephemeral_scope_mismatch") {
       // Bounded and content-free: no task scope and nothing about the retained entry.
       console.warn("[opencodex] refusing continuation because the client task scope does not match replay state");
     }
     // Local replay failures require full client replay.
     if (replayFailure) {
-      failLinkTurnExpansion(options.linkTurn, req, logCtx, body, replayFailure.reason);
+      failLinkTurnExpansion(options.linkTurn, req, logCtx, body,
+        replayFailure.reason === "ephemeral_scope_mismatch" ? "scope_mismatch" : replayFailure.reason);
+      const { code } = replayFailure;
+      if (strictReplay) {
+        logCtx.errorCode = code;
+        if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+        else markLocalRequestLogRefusal(logCtx, code);
+        // Attribute a direct native refusal using only request metadata and a route preview.
+        // A miss never enters auth, subagent fallback or encrypted-task recovery for logging.
+        const { model, reasoning } = body as { model?: unknown; reasoning?: unknown };
+        try {
+          const parsed = parseRequest({ model, reasoning });
+          logCtx.requestedModel ??= options.mainHardLockFallbackOverride?.sourceModel
+            ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
+          logCtx.requestedEffort ??= parsed.options.reasoning;
+          if (!concreteSelection && !memoryModelApplies && !shadowCallMatches
+            && !resolveComboId(config, parsed.modelId) && !resolvePolicyProfileId(config, parsed.modelId)) {
+            const preview = previewRouteModel(config, parsed.modelId);
+            if (isCanonicalOpenAiForwardProvider(preview.provider)) {
+              logCtx.provider = preview.providerName;
+              logCtx.model = preview.modelId;
+              logCtx.routeDecision = preview.routeDecision;
+            }
+          }
+        } catch { /* Unavailable attribution does not change the replay refusal. */ }
+      }
       return markProxyError(formatErrorResponse(
         400,
-        "previous_response_not_found",
+        code,
         "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
       ));
     }
@@ -520,12 +495,8 @@ export async function prepareResponsesRequest(
     });
   }
 
-  // Spawn-message compatibility (both directions): agent_message task payloads ride in
-  // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
-  // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
-  // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
-  // verbatim). Structurally valid backend ciphertext stays byte-identical; encoded-looking unknown
-  // slots remain opaque only until final-route handling can preserve or strip them safely.
+  // Convert plaintext task payloads before parsing for both translated and native requests.
+  // Preserve recognized ciphertext and let final routing decide what to do with unknown slots.
   {
     const rewritten = sanitizeEncryptedContentInPlace(
       (body as { input?: unknown } | undefined)?.input,
@@ -587,13 +558,22 @@ export async function prepareResponsesRequest(
       parsed._nativeReasoningReplay = options.nativeReasoningReplay;
       parsed._nativeReasoningMint = options.nativeReasoningMint;
       parsed._anthropicServerTools = options.anthropicServerTools;
+      // The lowered named choice serves the wire builder but grants no client or synthetic tool permission.
+      if (options.anthropicHostedAdvisorSelection) {
+        parsed.options.explicitRootFunctionChoices = [];
+        parsed.options.explicitClientToolChoices = [];
+      }
       parsed._anthropicServerReplay = options.anthropicServerReplay;
       parsed._anthropicSystemCachePrefix = options.anthropicSystemCachePrefix;
       parsed._anthropicInbound = true;
       if (parsed.options.textFormat?.type === "json_schema") parsed._structuredOutputConformance = true;
     }
+    if (options.advisorInternal || options.internalSidecarCall || options.internalDecisionCall) {
+      parsed._proxyOwnedSystemPrompt = true;
+    }
     // Codex's own "new" turn metadata, for the experimental Anthropic perMessageEffort option (#6895).
-    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers, options.inboundTransport);
+    parsed._codexNewHistory = codexTurnStartsNewHistory(body, req.headers,
+      options.inboundTransport === "websocket" ? "websocket" : undefined);
     parsed._promptCacheKeyIsSharedCohort = options.promptCacheKeyIsSharedCohort;
     // The body may have been rebuilt since the inbound observation (previous-response
     // expansion); alias the parsed raw body to the same draft so the outbound
@@ -673,6 +653,7 @@ export async function prepareResponsesRequest(
   options.onRequestBodyRead?.();
   const responseStateOptions = (force = false) => ({
     replayOwnerKey,
+    ...(replayConnectionScope ? { connectionScope: replayConnectionScope } : {}),
     compiledPlaintext: parsed._plaintextV2EverPrepared === true,
     ...(force ? { force: true } : {}),
     ...((strictReplay ? inboundOwnThreadId : parsed._clientThreadId) ? { clientThreadId: strictReplay ? inboundOwnThreadId : parsed._clientThreadId } : {}),
@@ -726,11 +707,7 @@ export async function prepareResponsesRequest(
     ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   recordRequestedReasoning(logCtx, parsed.options.reasoning, readConfiguredCodexEffort());
-  // What this request may spend beyond its input, for the durable spend reservation (#4707).
-  // Read from the caller rather than from the adapter's serialized body, because the
-  // reservation has to exist before the body does. A caller that omits it leaves the
-  // provider/model default in charge and reserves only the input estimate; settlement then
-  // books the real figure, so the gap is a looser bound up front, never a wrong one after.
+  // Base the pre-serialization spend reservation on the caller's output limit when supplied (#4707).
   if (typeof parsed.options.maxOutputTokens === "number" && parsed.options.maxOutputTokens > 0) {
     logCtx.spendOutputCeilingTokens = Math.trunc(parsed.options.maxOutputTokens);
   }
@@ -742,9 +719,6 @@ export async function prepareResponsesRequest(
 
   let route: RouteResult;
   let credentialDomainWasRewritten = false;
-  // The selector the caller actually sent, captured before shadow interception
-  // or a subagent fallback rewrites it, so a refusal names the client's own
-  // request rather than a destination it never asked for.
   const inboundSelector = options.clientModelLabel;
   const inboundRoutingSelector = options.mainHardLockFallbackOverride?.sourceModel ?? parsed.modelId;
   const selectorTargetsSecondary = (selector: string): boolean => {
@@ -1048,6 +1022,10 @@ export async function prepareResponsesRequest(
   };
   let selectedForwardHeaders = req.headers;
   let subagentFallbackAccountId = config.activeCodexAccountId ?? null;
+  // A typed fact for providers that refuse fallback-routed turns (the Antigravity ACP policy): set only
+  // where a fallback actually moves the route (a selection that keeps the requested model is not one),
+  // never inferred from headers, models or tools.
+  let subagentFallbackSelected = false;
   let subagentFallbackAccountPreview: SubagentPoolAccountPreview | undefined;
   let subagentFallbackModelEligibleAccountIdsForModel: SubagentModelEligibleAccountIds | undefined;
   let subagentQuotaFailureModel = parsed.modelId;
@@ -1144,6 +1122,7 @@ export async function prepareResponsesRequest(
     );
     if (fallback?.refusal) return fallback.refusal;
     if (fallback) {
+      if (fallback.to !== fallback.from) subagentFallbackSelected = true;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
       (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
       if (isInjectionDebugEnabled()) {
@@ -1180,6 +1159,22 @@ export async function prepareResponsesRequest(
   }
 
   let recoveryFailureReason: AgentTaskRecoveryFailureReason | undefined;
+  let recoveryAttempts: PersistedUsageAttempt[] | undefined;
+  const onRecoverySend: NonNullable<Parameters<typeof recoverAgentTaskHistory>[4]>["onSend"] =
+    hasUnexpandedPreviousResponse ? ({ model, status, durationMs, usage }) => {
+      const attempts = recoveryAttempts ??= [];
+      const ordinal = (logCtx.attempts?.length ?? 0) + attempts.length + 1;
+      const attempt = beginRequestAttempt(ordinal, OPENAI_CODEX_PROVIDER_ID, model, "openai-responses");
+      noteAttemptSend(attempt, undefined);
+      finishRequestAttempt(attempt, status ?? 502, durationMs, usageFromResponsesPayload(usage));
+      if (status === undefined) {
+        attempt.failureStage = "pre-header";
+        attempt.failureCause = "transport-ambiguous";
+      } else {
+        attributePhysicalAttempt(attempt);
+      }
+      attempts.push(attempt);
+    } : undefined;
   const agentTaskRecoveryGateReason = inboundWire !== "responses"
     ? "non_responses_wire"
     : !agentTaskRecovery
@@ -1222,6 +1217,7 @@ export async function prepareResponsesRequest(
         resolvedAdmission: options.admission,
         apiKeyHeaderPresent: options.agentTaskRecoveryApiKeyHeaderPresent,
         traceId: historyRecoveryTraceId,
+        onSend: onRecoverySend,
       },
     )
     : { matched: 0, recovered: 0, recoveryCount: 0, complete: true };
@@ -1314,6 +1310,7 @@ export async function prepareResponsesRequest(
           resolvedAdmission: options.admission,
           apiKeyHeaderPresent: options.agentTaskRecoveryApiKeyHeaderPresent,
           traceId: agentTaskRecoveryTraceId,
+          onSend: onRecoverySend,
         },
       );
       recoveryFailureReason = recoveryResult.recovered ? undefined : recoveryResult.reason;
@@ -1358,6 +1355,7 @@ export async function prepareResponsesRequest(
             "_stripReasoningEncryptedContent",
             "_portableCompaction",
             "_codexNewHistory",
+            "_proxyOwnedSystemPrompt",
           ];
           for (const key of kept) {
             if (parsed[key] !== undefined) {
@@ -1504,6 +1502,7 @@ export async function prepareResponsesRequest(
           })();
           if (fallback?.refusal) return fallback.refusal;
           if (fallback) {
+            if (fallback.to !== fallback.from) subagentFallbackSelected = true;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackFrom = fallback.from;
             (logCtx as unknown as Record<string, unknown>).subagentModelFallbackTo = fallback.to;
             if (isInjectionDebugEnabled()) {
@@ -1668,8 +1667,8 @@ export async function prepareResponsesRequest(
   }
 
   // The canonical ChatGPT backend rejects previous_response_id, so a local replay miss leaves no
-  // safe way to recover the omitted history. Fail before auth, adapter construction, or upstream
-  // I/O instead of stripping the id and silently forwarding a context-free delta (#702).
+  // safe way to recover the omitted history. Fail before dispatching the continuation itself
+  // instead of stripping the id and silently forwarding a context-free delta (#702).
   // Codex recognizes previous_response_not_found on WebSocket errors and reconnects with its
   // full input. A generic invalid_request_error instead terminates the task after cache expiry.
   if (
@@ -1678,9 +1677,18 @@ export async function prepareResponsesRequest(
   ) {
     discardRecoveredAgentTaskCache();
     markLinkTurnMissing(logCtx);
+    const code = "previous_response_not_found";
+    logCtx.provider = route.providerName;
+    logCtx.model = route.modelId;
+    logCtx.errorCode = code;
+    // A recovery send already finished on its own model and status. Keep it off activeAttempt,
+    // which the log finalizer stamps with the continuation's terminal outcome.
+    if (recoveryAttempts) (logCtx.attempts ??= []).push(...recoveryAttempts);
+    if (logCtx.attempts?.some(attempt => attempt.sendCount > 0)) logCtx.terminalSource = "synthetic";
+    else markLocalRequestLogRefusal(logCtx, code);
     return markProxyError(formatErrorResponse(
       400,
-      "previous_response_not_found",
+      code,
       "Continuation state is unavailable or corrupt; resend the full conversation without previous_response_id.",
     ));
   }
@@ -1736,7 +1744,7 @@ export async function prepareResponsesRequest(
   try {
     assertPolicyNormalizedRoute(policyScope, admittedPolicyRoute, route);
     const copilotNegotiationPending = route.providerName === "github-copilot" && route.provider.authMode !== "forward";
-    if (!copilotNegotiationPending && route.provider.adapter === "openai-chat"
+    if (!options.anthropicHostedAdvisorSelection && !copilotNegotiationPending && route.provider.adapter === "openai-chat"
       && !chatCanPreserveMandatoryToolChoice(parsed._rawBody, route.provider, route.modelId, parsed.context.tools ?? [])) {
       // Combo children carry the refusal's local identity too, so a compatible sibling target
       // can still be tried; a direct request keeps the client-facing 400 below.
@@ -1766,14 +1774,23 @@ export async function prepareResponsesRequest(
     discardRecoveredAgentTaskCache();
     return admissionModelDeniedResponse(projectAdmissionModelDeniedLog(new AdmissionModelDeniedError(inboundSelector, scopedDestination), logCtx));
   }
-  // A typed Advisor runs its own model server-side on this provider (#8448). The native lane refuses
-  // a declaration outside the caller's scope; the Advisor is optional here, so it is not forwarded.
+  // A typed Advisor runs its own model server-side on this provider (#8448). An out-of-scope
+  // declaration is withheld. A named selection also needs that declaration on the final route.
   const serverTools = parsed._anthropicServerTools;
-  const scopedServerTools = serverTools?.filter(tool =>
-    !nativeMessagesToolScopeDenial(admissionScope, route.providerName, route.modelId, { tools: [tool] }));
+  const scopedServerTools = scopedAnthropicServerTools(admissionScope, route, serverTools);
   if (serverTools && scopedServerTools && scopedServerTools.length !== serverTools.length) {
     parsed._anthropicServerTools = scopedServerTools;
     if (advisorServerToolDestination(route.provider)) addProtocolEntryReason(logCtx, "advisor-tool-outside-model-scope");
+  }
+  if (options.anthropicHostedAdvisorSelection) {
+    if (options.anthropicHostedAdvisorSelection === "ambiguous") {
+      return markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The hosted Advisor tool_choice is ambiguous because multiple tools are named advisor."));
+    }
+    if (!admitsHostedAdvisor(route.provider, scopedServerTools, parsed.context.tools)) {
+      return markPolicyCandidateRefusal(markProxyError(formatErrorResponse(400, "invalid_request_error",
+        "The selected hosted Advisor tool is unavailable for this route or model scope.")));
+    }
   }
   // Attribute local auth/cooldown failures to the public selector too; exact auth may fail before
   // the normal post-resolution provider label is assigned.
@@ -1822,7 +1839,7 @@ export async function prepareResponsesRequest(
     // A combo child is the one caller that can afford a strict gate: skipping a target it
     // cannot fit is safe before any upstream bytes are sent, and the ladder continues. A
     // direct request has nowhere to go, so it keeps the loose pathological-input gate.
-    const inputAdmission = options.comboAttempt
+    const inputAdmission = options.comboAttempt && options.comboContextDegraded !== true
       ? checkComboTargetInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config))
       : checkInputAdmission(parsed, route.provider, route.providerName, parsed.modelId, nativeContextLimits(config));
     if (!inputAdmission.admitted) {
@@ -1969,6 +1986,7 @@ export async function prepareResponsesRequest(
       subagentFallbackAccountId = value;
     },
     subagentQuotaFailureModel,
+    subagentFallbackSelected,
     poolAffinityKey,
     ephemeralReplayScope,
     clientRequestedStream,
