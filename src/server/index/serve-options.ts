@@ -605,7 +605,7 @@ export function createServeOptions(ctx: ServeOptionsContext) {
             admission,
             websocketLease,
             sessionLaneIdFromRequest(req.headers),
-            classifyUsageClient(req.headers), replayPrincipal, replayScope,
+            req.headers, classifyUsageClient(req.headers), replayPrincipal, replayScope,
           ), peerLocal: classifyRequestPeer(ingress, requestServer.requestIP?.(req)?.address, config.dashboardTrustedProxy, req.headers).local },
         })) return undefined as unknown as Response;
         releaseConnectionReplayScope(replayScope);
