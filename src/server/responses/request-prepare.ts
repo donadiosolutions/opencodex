@@ -8,12 +8,10 @@ import { clientFacingModelLabel, clientFacingModelText } from "../../lib/error-d
 import { markProxyError } from "../../lib/client-error-body";
 import { completeClaudeBridgePoolIdentity } from "../claude-bridge-pool-session";
 import type { HandleResponsesOptions, ResponsesRequestContext, ResponsesAdmissionState, ResponsesDispatchers } from "./core-options";
-import type { PolicyRequestEvidence } from "../../routing/evaluator";
 import type { RequestLogContext } from "../request-log";
-import { addProtocolEntryReason, markProtocolEntry, protocolMarkFeatures } from "../../protocols/trace";
+import { addProtocolEntryReason } from "../../protocols/trace";
 import { admitsHostedAdvisor, scopedAnthropicServerTools } from "../messages-native-scope";
 import { advisorServerToolDestination } from "../../adapters/anthropic/advisor-tool";
-import { isAntigravityRoute } from "../antigravity-direct-eligibility";
 import { capturePolicyRequestRoute, assertPolicyNormalizedRoute, recordPolicyPreparedDestination, policyCandidateRefusalResponse, markPolicyCandidateRefusal, MandatoryToolChoiceUnavailableError, mandatoryToolChoiceUnavailableResponse } from "./policy-request-scope";
 import {
   agentTaskRecoveryReplayScope,
@@ -121,7 +119,6 @@ import {
   NoEligiblePolicyCandidateError,
   AnthropicSecondaryInstanceUnavailableError,
 } from "../../router";
-import { evidenceFromBody } from "../../routing/request-evidence";
 import { resolvePolicyProfileId } from "../../routing/profile";
 import { OPENAI_CODEX_PROVIDER_ID, isCanonicalOpenAiForwardProvider } from "../../providers/openai-tiers";
 import { resolveNativeReasoningRetention } from "../../config/schema/native-reasoning-retention";
@@ -225,47 +222,7 @@ import { redactHostedImageDisplayPaths } from "../responses-hosted-image-display
 import { eagerCodexToolCatalogSurface, warnEagerCodexToolCatalog } from "./codex-tool-catalog";
 import { codexTurnStartsNewHistory } from "../../adapters/anthropic/per-message-effort";
 
-/** Policy-routing evidence. The direct lane's settings-only body has no conversation to scan. */
-function routeEvidence(options: Pick<HandleResponsesOptions, "directRequest">, parsed: OcxParsedRequest): PolicyRequestEvidence {
-  return options.directRequest?.evidence ?? evidenceFromBody(parsed._rawBody);
-}
-
-/**
- * Leave the Antigravity direct lane for this request: put the bridge conversation back on the
- * Responses body so every `_rawBody` reader sees what the bridge would have sent, and trace the
- * request as the bridge. The IR conversation already decoded stays: it equals what
- * `parseRequest` builds from the restored body (`tests/protocols/chat-ir-parity.test.ts`).
- */
-function restoreDirectRequestConversation(options: HandleResponsesOptions, body: unknown, logCtx: RequestLogContext): void {
-  const direct = options.directRequest;
-  if (!direct) return;
-  options.directRequest = undefined;
-  if (body && typeof body === "object" && !Array.isArray(body)) Object.assign(body, direct.bridgeConversation());
-  if (options.clientEncoder) options.clientEncoder = { ...options.clientEncoder, requestLane: "bridge" };
-  markProtocolEntry(logCtx, {
-    inbound: direct.protocol,
-    lane: "bridge",
-    reasonCodes: ["not-migrated"],
-    features: protocolMarkFeatures(logCtx) ?? [],
-  });
-}
-
-/**
- * Leave the direct lane as soon as the route stops being the Antigravity route it was decided
- * for. Called after every route assignment, so readers that run between a reroute and dispatch
- * (canonical sanitization, ciphertext stripping, final normalization) see the bridge body.
- */
-function leaveDirectLaneIfRerouted(
-  options: HandleResponsesOptions,
-  route: Pick<RouteResult, "providerName" | "modelId" | "provider">,
-  parsed: OcxParsedRequest,
-  logCtx: RequestLogContext,
-): void {
-  const direct = options.directRequest;
-  if (!direct) return;
-  if (route.providerName === direct.providerName && route.modelId === direct.modelId && isAntigravityRoute(route)) return;
-  restoreDirectRequestConversation(options, parsed._rawBody, logCtx);
-}
+import { leaveDirectLaneIfRerouted, restoreDirectRequestConversation, routeEvidence } from "./request-prepare-direct-lane";
 
 /** Parses, selects, and admits one request without changing the dispatch policy. */
 export async function prepareResponsesRequest(
@@ -318,11 +275,8 @@ export async function prepareResponsesRequest(
       transport: options.inboundTransport === "websocket" ? "websocket" : undefined,
     });
   }
-  // Codex's memory pipeline names a destination per phase. The phase is read from Codex's own turn
-  // metadata, never from the model id: Phase 1 shares `gpt-5.6-luna` with the app's title/commit
-  // helper calls. Read here, ahead of the shadow intercept below, because the phase decision is the
-  // more specific of the two settings and must be the one that survives when both match one request.
-  // A JEV decision-model call is the router's own auxiliary turn, never a Codex memory phase.
+  // Read Codex's memory phase before shadow interception so the more specific route wins.
+  // JEV decision calls do not participate in memory-phase routing.
   const memoryModelPhase = options.internalDecisionCall ? undefined : options.memoryModelPhase
     ?? ((config.memoryModels?.extract || config.memoryModels?.consolidation)
       && !concreteSelection && !options.compactionRoutingOverride && inboundWire === "responses"
@@ -380,16 +334,8 @@ export async function prepareResponsesRequest(
       }
     }
   }
-  // A shadow-call replacement that names a COMBO is routing policy, not the identity of any
-  // one pick. The late intercept site below resolves it through routeModel/tryPickComboModel,
-  // which collapses the table to a single target while still tagging `routeKind: "combo"`, so
-  // the combo gate on the next line never fires, handleComboResponses never runs, and 429/5xx
-  // hops — which only exist inside that loop — are unreachable (#4129). Rewrite the selector
-  // here instead, before comboIdFromRawBody reads `model`, and identify the combo by CONFIG
-  // LOOKUP so the check can never observe a one-candidate collapse.
-  // A memory target that names a combo has to reach the combo dispatcher as `model`, or its own
-  // failover loop is unreachable (#4129) — the same reason the shadow intercept rewrites its combo
-  // target here. Every other target is resolved at the late site, where the admission scope exists.
+  // Rewrite memory and shadow combo selectors before dispatch to preserve their failover ladders (#4129).
+  // Resolve ordinary targets later, once the admission scope exists.
   let memoryModelComboRouted = false;
   if (memoryModelApplies && memoryModelTarget && body && typeof body === "object" && !Array.isArray(body)) {
     const memoryComboId = resolveComboId(config, memoryModelTarget.model);
@@ -423,12 +369,7 @@ export async function prepareResponsesRequest(
       }
     }
   }
-  // The hard-lock fallback owns ordinary turns only, and only after every more specific
-  // routing setting had its chance above: a shadow-intercepted, memory-phased, compaction
-  // or decision turn keeps its own destination, and an intercepted combo selector is
-  // already owned by the intercept. A spawned sub-agent turn names its model on purpose,
-  // the same reason the shadow intercept leaves it alone. Like the sites above it, this
-  // must run before comboIdFromRawBody reads `model`.
+  // Reserve hard-lock fallback for ordinary turns without a more specific route.
   if (!concreteSelection && !options.compactionRoutingOverride && !isCompactionTrigger && !options.internalDecisionCall
     && !shadowCallIntercepted && !shadowCallMatches && !memoryModelApplies && !threadSpawn && inboundWire === "responses") {
     try {
@@ -554,20 +495,9 @@ export async function prepareResponsesRequest(
     });
   }
 
-  // Spawn-message compatibility (both directions): agent_message task payloads ride in
-  // encrypted_content slots as plaintext. Rewrite them to input_text on the RAW body BEFORE
-  // parsing so every consumer sees the payload: parseRequest (routed/translated providers read
-  // the parsed messages) and the native passthrough (_rawBody is this same object, serialized
-  // verbatim). Structurally valid backend ciphertext stays byte-identical; encoded-looking unknown
-  // slots remain opaque only until final-route handling can preserve or strip them safely.
-  {
-    const rewritten = sanitizeEncryptedContentInPlace(
-      (body as { input?: unknown } | undefined)?.input,
-      // The final destination is not known yet. Keep ambiguous encoded slots opaque until route
-      // selection can either strip them for a third party or apply strict native classification.
-      { preserveUnknownOpaqueSlots: true },
-    );
-    if (rewritten > 0) {
+  // Convert plaintext task payloads before parsing for both translated and native requests.
+  // Preserve recognized ciphertext and let final routing decide what to do with unknown slots.
+  if (rewritten > 0) {
       recordContextTransformation(logCtx, { kind: "plaintext_encrypted_rewrite" });
     }
     if (rewritten > 0)
@@ -770,25 +700,7 @@ export async function prepareResponsesRequest(
     ?? options.compactionRoutingOverride?.sourceModel ?? parsed.modelId;
   logCtx.requestedEffort = parsed.options.reasoning;
   recordRequestedReasoning(logCtx, parsed.options.reasoning, readConfiguredCodexEffort());
-  // What this request may spend beyond its input, for the durable spend reservation (#4707).
-  // Read from the caller rather than from the adapter's serialized body, because the
-  // reservation has to exist before the body does. A caller that omits it leaves the
-  // provider/model default in charge and reserves only the input estimate; settlement then
-  // books the real figure, so the gap is a looser bound up front, never a wrong one after.
-  if (typeof parsed.options.maxOutputTokens === "number" && parsed.options.maxOutputTokens > 0) {
-    logCtx.spendOutputCeilingTokens = Math.trunc(parsed.options.maxOutputTokens);
-  }
-  logCtx.callerServiceTier = sanitizeLogMetadataString(parsed.options.serviceTier);
-  logCtx.requestedServiceTier = parsed.options.serviceTier;
-  logCtx.requestedSpeedLabel = requestLogSpeedLabel(parsed.options.serviceTier);
-  logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
-  logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
-
-  let route: RouteResult;
-  let credentialDomainWasRewritten = false;
-  // The selector the caller actually sent, captured before shadow interception
-  // or a subagent fallback rewrites it, so a refusal names the client's own
-  // request rather than a destination it never asked for.
+  // Base the pre-serialization spend reservation on the caller's output limit when supplied (#4707).
   const inboundSelector = options.clientModelLabel;
   const inboundRoutingSelector = options.mainHardLockFallbackOverride?.sourceModel ?? parsed.modelId;
   const selectorTargetsSecondary = (selector: string): boolean => {

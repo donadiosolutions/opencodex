@@ -1785,7 +1785,6 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     const sent: string[] = [];
     const terminals: Array<[string, number]> = [];
     const ws = { readyState: 1, data: {}, send(message: string) { sent.push(message); return 1; } } as unknown as ServerWebSocket<WsData>;
-    // The live WS log observes the client stream and hands the row status to the account recorder.
     await pumpResponsesSseToWebSocket(ws, relayed, { untilEof: true, rawUpstream,
       onSsePayload: payload => inspectResponseLogSsePayload(log, payload),
       onTerminal: status => { terminals.push([status, httpStatusForRequestLogTerminal(status, log)]); } });
@@ -1808,7 +1807,6 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
       result: { frames: [event], terminals: [["completed", 200]] }, reusableId: "r1", logged: "completed",
     });
   });
-
   test.each([
     ["event error", { error: { code: "rate_limit_exceeded" } }, {}],
     ["event last_error", { error: {}, last_error: { code: "rate_limit_exceeded" } }, {}],
@@ -1818,8 +1816,7 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
   ] as const)("WS forwards an error-bearing completion and reports quota failure (%s)", async (_carrier, outer, inner) => {
     const log: RequestLogContext = { model: "fixture-model", provider: "openai" };
     const event = {
-      type: "response.completed",
-      ...outer,
+      type: "response.completed", ...outer,
       response: { id: "r1", status: "completed", output: [], ...inner },
     };
     const src = sourceStream([`event: response.completed\ndata: ${JSON.stringify(event)}\n\n`]);
@@ -1827,7 +1824,6 @@ describe("Codex WebSocket frames share the bare-error precedence rule", () => {
     expect(result).toEqual({ frames: [event], terminals: [["failed", 429]] });
     expect(log.observedTerminalStatus).toBe("failed");
   });
-
   test.each(["tee", "eager"] as const)("%s WS row keeps the bare verdict behind the relay's own tail", async mode => {
     for (const copy of ["unauthorized request", "rate limit hit, slow down"]) {
       const log: RequestLogContext = { model: "fixture-model", provider: "openai" };

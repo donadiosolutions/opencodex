@@ -517,8 +517,7 @@ async function injectCodexConfigImpl(
       injectedRootWebSearch: plan.injectedRootWebSearch,
       replacedRootWebSearch: plan.replacedRootWebSearch,
       injectedSubagentDefaults: plan.injectedSubagentDefaults,
-      // This is the catalog artifact selected for this injection, even when config.toml
-      // already points at that path and therefore needs no textual rewrite.
+      // Record the selected artifact even when config.toml needs no rewrite.
       injectedCatalogPath: plan.catalogPath,
       injectedCatalogBinding: plan.injectedCatalogBinding,
     }, hooks));
