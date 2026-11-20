@@ -497,7 +497,14 @@ export async function prepareResponsesRequest(
 
   // Convert plaintext task payloads before parsing for both translated and native requests.
   // Preserve recognized ciphertext and let final routing decide what to do with unknown slots.
-  if (rewritten > 0) {
+  {
+    const rewritten = sanitizeEncryptedContentInPlace(
+      (body as { input?: unknown } | undefined)?.input,
+      // The final destination is not known yet. Keep ambiguous encoded slots opaque until route
+      // selection can either strip them for a third party or apply strict native classification.
+      { preserveUnknownOpaqueSlots: true },
+    );
+    if (rewritten > 0) {
       recordContextTransformation(logCtx, { kind: "plaintext_encrypted_rewrite" });
     }
     if (rewritten > 0)
@@ -701,6 +708,17 @@ export async function prepareResponsesRequest(
   logCtx.requestedEffort = parsed.options.reasoning;
   recordRequestedReasoning(logCtx, parsed.options.reasoning, readConfiguredCodexEffort());
   // Base the pre-serialization spend reservation on the caller's output limit when supplied (#4707).
+  if (typeof parsed.options.maxOutputTokens === "number" && parsed.options.maxOutputTokens > 0) {
+    logCtx.spendOutputCeilingTokens = Math.trunc(parsed.options.maxOutputTokens);
+  }
+  logCtx.callerServiceTier = sanitizeLogMetadataString(parsed.options.serviceTier);
+  logCtx.requestedServiceTier = parsed.options.serviceTier;
+  logCtx.requestedSpeedLabel = requestLogSpeedLabel(parsed.options.serviceTier);
+  logCtx.configuredServiceTier = readConfiguredCodexServiceTier();
+  logCtx.configuredSpeedLabel = requestLogSpeedLabel(logCtx.configuredServiceTier);
+
+  let route: RouteResult;
+  let credentialDomainWasRewritten = false;
   const inboundSelector = options.clientModelLabel;
   const inboundRoutingSelector = options.mainHardLockFallbackOverride?.sourceModel ?? parsed.modelId;
   const selectorTargetsSecondary = (selector: string): boolean => {
