@@ -648,7 +648,7 @@ test("Logs: attempt details render exact reasoning wire values without legacy pl
         recoveryKinds: [],
         usageStatus: "unreported",
         upstreamTransport: "websocket",
-        accountLogLabel: "pdeadbeef",
+        accountLogLabel: "pdeadbe",
         requestedEffort: "high",
         effectiveEffort: "enabled",
         reasoningWireField: "thinking.type",
@@ -703,7 +703,7 @@ test("Logs: attempt details render exact reasoning wire values without legacy pl
   expect(rows[0]?.textContent).toContain("Work (pabc123)");
   expect(rows[1]?.textContent).toContain("high → enabled (thinking.type=enabled)");
   expect(rows[1]?.textContent).toContain("WebSocket");
-  expect(rows[1]?.textContent).toContain("pdeadbeef");
+  expect(rows[1]?.textContent).toContain("pdeadbe");
   expect(rows[2]?.textContent).toContain("legacy-model");
   expect(rows[2]?.textContent).toContain("Not recorded");
   expect(rows[2]?.querySelectorAll("br")).toHaveLength(2);

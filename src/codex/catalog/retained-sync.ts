@@ -17,7 +17,7 @@ import { providerCodexAccountMode } from "../../providers/registry";
 import { COMBO_NAMESPACE } from "../../combos";
 import { codexAccountNamespaceEntries, isMainCodexAccountTarget } from "../account-namespaces";
 import { MAIN_CODEX_ACCOUNT_ID } from "../main-account";
-import { applyNativeAccessPrograms, applyNativeUltraFastTier } from "./access-programs";
+import { applyNativeAccessPrograms, applyNativeRosterCapabilities, applyNativeUltraFastTier } from "./access-programs";
 import { advanceNativeInheritanceTemplate, captureNativeInheritanceTemplate } from "./native-template";
 import { omitDisabledNativeCatalogEntries } from "./native-omission";
 import {
@@ -559,6 +559,7 @@ function writeRetainedCatalogSync({
       warningPolicy: "emit",
     },
   });
+  applyNativeRosterCapabilities(catalog.models, modelEntitlements, accountTargets, openaiContextCap, catalogModelsForMerge);
   clampCatalogModelsToCodexSupport(catalog.models, { observedCatalog: bundledCodexCatalogSnapshot() });
   finalizeAutoReviewModelOverride(catalog.models, catalogModelsForMerge, config);
   applyAccountModelMetadata(

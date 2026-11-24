@@ -34,7 +34,7 @@ import { speedLabel } from "./logs-speed-label";
 import { decodeRateLabelKeys } from "./logs-decode-rate";
 import { failureAttributionLabels, failureDetailLabel, failureSummary, upstreamConditionLabel } from "./logs-failure-summary";
 import "./logs-decode-rate.css";
-import { effectivePriorityLowerBound, estimateReasonsForBilling, formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling, type CostEstimateReason as BillingEstimateReason } from "./logs-cost-format";
+import { effectivePriorityLowerBound, estimateReasonsForBilling, formatCredits, formatEstimatedUsd, formatEstimatedUsdValue, formatUsdPrecise, summarizeEstimatedCosts, type CostBilling, type PartialCostResult, type CostEstimateReason as BillingEstimateReason } from "./logs-cost-format";
 import { cacheSplit, isCursorUsageProvider, tokensTitle } from "./logs-token-title";
 import {
   sanitizeLogEntryRouteDecision,
@@ -49,6 +49,7 @@ import type {
   RequestSpendTotals,
   ResendPermission,
 } from "../../../src/usage/telemetry-contract";
+import { ACCOUNT_LOG_LABEL_RE } from "../../../src/usage/telemetry-contract";
 import {
   classifyRequestOutcome,
   type RequestOutcomeClass,
@@ -100,7 +101,7 @@ type MetricUnavailableReason =
   | "usage_missing" | "usage_unsupported" | "output_missing" | "invalid_duration"
   | "price_unmatched" | "invalid_cache_breakdown"
   | "invalid_usage" | "combo_attempt_unavailable"
-  | "ttft_missing" | "decode_window_too_short"
+  | "ttft_missing" | "decode_window_missing" | "decode_window_too_short"
   | "credit_cost_unrepresentable";
 
 /** The proxy's reason vocabulary; the shared formatter owns the billing-basis filter. */
@@ -137,6 +138,7 @@ type CostResult =
     };
     estimateReasons: CostEstimateReason[];
   }
+  | PartialCostResult
   | { kind: "unavailable"; reason: MetricUnavailableReason };
 
 interface LogDisplayMetrics {
@@ -368,6 +370,7 @@ const METRIC_REASON_KEYS = {
   invalid_usage: "logs.detail.reason.invalid_usage",
   combo_attempt_unavailable: "logs.detail.reason.combo_attempt_unavailable",
   ttft_missing: "logs.detail.reason.ttft_missing",
+  decode_window_missing: "logs.detail.reason.decode_window_missing",
   decode_window_too_short: "logs.detail.reason.decode_window_too_short",
   credit_cost_unrepresentable: "logs.detail.reason.credit_cost_unrepresentable",
 } as const satisfies Record<MetricUnavailableReason, string>;
@@ -1115,7 +1118,12 @@ export default function Logs({ apiBase }: { apiBase: string }) {
                   </td>
                   )}
                   {columns.cost && (
-                  <td className={cn("text-right tabular-nums", log.displayMetrics?.cost?.kind === "value" ? "font-mono" : "font-sans text-fg-subtle")}>
+                  <td
+                    className={cn("text-right tabular-nums", log.displayMetrics?.cost?.kind === "value" ? "font-mono" : "font-sans text-fg-subtle")}
+                    title={log.displayMetrics?.cost?.kind === "partial"
+                      ? t("logs.cost.partialMissing", { count: log.displayMetrics.cost.unpricedAttempts })
+                      : undefined}
+                  >
                     {formatEstimatedUsd(log.displayMetrics?.cost, t, localeTag)}
                   </td>
                   )}
@@ -1451,6 +1459,13 @@ function LogDetailDialog({
                 </ul>
               )}
             </>
+          ) : cost?.kind === "partial" ? (
+            <div className="log-detail-grid">
+              <span className="muted">{t("logs.detail.costSubtotal")}</span>
+              <span className="mono">{formatEstimatedUsdValue(cost.subtotalUsd, t, localeTag)}</span>
+              <span className="muted">{t("logs.detail.unavailableReason")}</span>
+              <span>{t("logs.cost.partialMissing", { count: cost.unpricedAttempts })}</span>
+            </div>
           ) : (
             <div className="log-detail-grid">
               <span className="muted">{t(unavailableCredit ? "logs.detail.section.costBilled" : "logs.detail.costTotal")}</span>
@@ -1491,12 +1506,10 @@ function LogDetailDialog({
                   // WHY in a vocabulary an operator can act on. `errorCode` stays behind it
                   // rather than being dropped: it is the exact wire code, which is what a bug
                   // report needs.
-                  const reason = attemptFailure.cause
-                    ?? attempt.errorCode
-                    ?? (attempt.recoveryKinds.length
-                      ? attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ")
-                      : undefined)
-                    ?? (attemptCost?.kind === "unavailable" ? t(metricReasonKey(attemptCost.reason)) : t("logs.detail.attempt.completed"));
+                  const recovery = attempt.recoveryKinds.map(kind => t(recoveryKindKey(kind))).join(", ");
+                  const reason = attemptFailure.cause ?? attempt.errorCode
+                    ?? (recovery || attemptCost?.kind !== "unavailable"
+                      ? t("logs.detail.attempt.completed") : t(metricReasonKey(attemptCost.reason)));
                   return (
                     <tr key={`${attempt.ordinal}-${attempt.provider}-${attempt.model}`}>
                       <td className="num mono">{attempt.ordinal}</td>
@@ -1505,7 +1518,10 @@ function LogDetailDialog({
                         <span className="mono muted log-detail-break">{attempt.model}</span>
                         <br />
                         <span className="muted text-caption log-detail-break">
-                          {t("logs.detail.attempt.upstreamTransport")}: {transportLabel(attempt.upstreamTransport, t)} · {t("logs.detail.attempt.account")}: {accountLabel(attempt.accountLogLabel, t, accountAliases)}
+                          {t("logs.detail.attempt.upstreamTransport")}: {transportLabel(attempt.upstreamTransport, t)}
+                          {typeof attempt.accountLogLabel === "string" && ACCOUNT_LOG_LABEL_RE.test(attempt.accountLogLabel) && (
+                            <> · {t("logs.detail.attempt.account")} <span className="mono">{accountLabel(attempt.accountLogLabel, t, accountAliases)}</span></>
+                          )}
                         </span>
                         {(attempt.requestedEffort || attempt.effectiveEffort) && (
                           <>
@@ -1548,7 +1564,11 @@ function LogDetailDialog({
                           </span>
                         )}
                       </td>
-                      <td className="log-detail-break">{reason}</td>
+                      <td className="log-detail-break">
+                        {attempt.status >= 100 && <><span className="mono">{attempt.status}</span>{" · "}</>}
+                        {reason}
+                        {recovery && <div className="muted text-caption">{recovery}</div>}
+                      </td>
                     </tr>
                   );
                 })}</tbody>
