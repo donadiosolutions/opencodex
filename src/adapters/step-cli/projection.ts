@@ -198,10 +198,12 @@ export function asRecord(value: unknown): Record<string, unknown> {
  * Only the final user message crosses `query.input`; earlier turns live in the process' session,
  * because the wire reduces every message to text and images.
  */
-export function pendingUserText(parsed: OcxParsedRequest): string | undefined {
+export function pendingUserText(parsed: OcxParsedRequest, { requireNewTurn = false } = {}): string | undefined {
   for (let index = parsed.context.messages.length - 1; index >= 0; index -= 1) {
     const message = parsed.context.messages[index];
-    if (!message || message.role !== "user") continue;
+    if (!message) continue;
+    if (requireNewTurn && (message.role === "toolResult" || message.role === "assistant")) return;
+    if (message.role !== "user") continue;
     if (!Array.isArray(message.content)) {
       return typeof message.content === "string" && message.content.length > 0
         ? message.content

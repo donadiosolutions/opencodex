@@ -22,9 +22,11 @@ its own process. `conversation.ts` namespaces thread/affinity handles by the ser
 cannot supply that authority. Requests without an admitted principal receive a private process that
 closes when the request ends; they cannot continue a held call across requests. When the child
 connection terminates, the active turn emits a transport error and settles even after all protocol
-requests have been acknowledged. The pool continues to own cleanup independently. Restarting
-would lose tool results the client already delivered, which this route cannot replay from a
-transcript.
+requests have been acknowledged. The pool continues to own cleanup independently.
+An owned request carrying a previous response ID, assistant history, or a tool result requires a
+live session. If the session is gone, the adapter returns `step_cli_conversation_expired` rather than
+starting a process without that history. A user-only request without a previous response ID can
+open a new session because its payload cannot distinguish a fresh start from a continuation.
 
 Events name the active turn's exact `queryId`. SDK reverse callbacks name the owning `sessionId`
 and carry a request ID allocated after the active query ID by the host's shared counter. If a
@@ -33,7 +35,7 @@ that query's declared catalog. Other permissions are denied. A
 `sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
-An unrelated tool result without fresh user text leaves the original held call available.
+An unrelated tool result leaves the original held call available unless a fresh user message follows it.
 After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
 also stops new query starts, busy retries and input that has yet to be sent.
 

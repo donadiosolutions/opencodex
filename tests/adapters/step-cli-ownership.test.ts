@@ -9,7 +9,7 @@ import { poolFor, clearStepCliSessions } from "../../src/adapters/step-cli/regis
 import { sessionHandlers } from "../../src/adapters/step-cli/events";
 import { resetOptionalShutdownHooksForTests, runOptionalShutdownHooks } from "../../src/lib/optional-shutdown-hooks";
 import type { AdapterEvent } from "../../src/types";
-import { attachTurn, event, host, incoming, parsed, provider, request, Session } from "../helpers/step-cli-ownership";
+import { attachTurn, event, host, incoming, parsed, provider, request, Session, user } from "../helpers/step-cli-ownership";
 
 describe("StepCode caller ownership", () => {
   test("failed handshakes release the session they opened", async () => {
@@ -67,12 +67,14 @@ describe("StepCode caller ownership", () => {
     } finally { await pool.closeAll(); }
   });
 
-  test("an unrelated result without user text leaves the held call available", async () => {
+  test("an unrelated result after prior user text leaves the held call available", async () => {
     const pool = host();
     const adapter = createStepCliAdapter(provider, { openSession: pool });
     const run = adapter.runTurn!;
-    const toolResult = (toolCallId: string) =>
-      parsed("principal-A", [{ role: "toolResult", toolCallId, content: "result", timestamp: 1 }]);
+    const toolResult = (toolCallId: string) => parsed("principal-A", [
+      ...user,
+      { role: "toolResult", toolCallId, toolName: "shell", content: "result", isError: false, timestamp: 1 },
+    ]);
     try {
       await run(parsed("principal-A"), incoming, () => {});
       const session = [...pool.entries.values()][0]!;

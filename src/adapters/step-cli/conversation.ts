@@ -60,6 +60,13 @@ export function ownedConversationHandle(
   ])).digest("hex");
 }
 
+/** Evidence that dispatch requires the in-process history StepCode cannot replay. */
+export function requiresLiveConversation(parsed: OcxParsedRequest): boolean {
+  return !!parsed.previousResponseId || parsed.context.messages.some(message =>
+    message.role === "assistant" || message.role === "toolResult",
+  );
+}
+
 /** How many turns may queue behind one conversation before a caller is told to retry. */
 export const MAX_QUEUED_TURNS = 2;
 

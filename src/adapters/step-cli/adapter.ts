@@ -2,7 +2,7 @@ import type { AdapterEvent, OcxParsedRequest, OcxProviderConfig } from "../../ty
 import type { AdapterRequest, IncomingMeta, ProviderAdapter } from "../base";
 import { getConfigDir } from "../../config/paths";
 import { CODING_AGENT_TOOL_LIMITS } from "../coding-agent/tool-catalog";
-import { ConversationQueueFullError, ownedConversationHandle, withConversationLock } from "./conversation";
+import { ConversationQueueFullError, ownedConversationHandle, requiresLiveConversation, withConversationLock } from "./conversation";
 import { STEP_CLI_HOST, STEP_CLI_TOOL_SERVER } from "./constants";
 import { sessionHandlers } from "./events";
 import { mapSessionFailure, refusal } from "./errors";
@@ -160,7 +160,16 @@ export function createStepCliAdapter(
 
       let session!: StepConversationSession;
       try {
-        session = await sessions.open(ref);
+        const opened = identified && requiresLiveConversation(parsed) ? sessions.get(ref) : await sessions.open(ref);
+        if (!opened) {
+          emit(refusal(
+            "The StepCode conversation is no longer available. Start a new conversation to continue.",
+            409,
+            "step_cli_conversation_expired",
+          ));
+          return;
+        }
+        session = opened;
         await session.handshake();
       } catch (error) {
         await session?.close();
@@ -275,7 +284,7 @@ async function driveTurn(
 
       // Text is suppressed ONLY when this turn really is the answer to the held call; a turn that
       // abandoned the call still carries the user's message and must keep it.
-      const userText = continuedQuery ? undefined : pendingUserText(parsed);
+      const userText = continuedQuery ? undefined : pendingUserText(parsed, { requireNewTurn: held !== undefined });
       if (!continuedQuery && !userText) {
         if (held) sessions.rememberHeldTool(ref, held);
         emit(

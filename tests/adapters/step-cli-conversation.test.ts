@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import { conversationHandle } from "../../src/adapters/step-cli/conversation";
+import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
+import { conversationHandle, ownedConversationHandle } from "../../src/adapters/step-cli/conversation";
 import { latestToolResult } from "../../src/adapters/step-cli/projection";
 import {
   encodeStepFrame,
@@ -12,7 +13,8 @@ import {
 } from "../../src/adapters/step-cli/stdio-frames";
 import { STEP_CLI_TOOL_SERVER } from "../../src/adapters/step-cli/constants";
 import { STEP_CLI_TOOL_SERVER as BRIDGE_NAMESPACE } from "../../src/adapters/step-cli/tool-bridge";
-import type { OcxParsedRequest } from "../../src/types";
+import type { AdapterEvent, OcxParsedRequest } from "../../src/types";
+import { host, incoming, parsed as ownedRequest, provider, user } from "../helpers/step-cli-ownership";
 
 function headers(entries: Record<string, string>): Headers {
   return new Headers(entries);
@@ -62,6 +64,49 @@ describe("StepCode conversation identity", () => {
     );
   });
 });
+
+test.each(["response id", "assistant history", "tool result"] as const)(
+  "an owned continuation with %s cannot replace an expired StepCode process",
+  async evidence => {
+    const pool = host();
+    const run = createStepCliAdapter(provider, { openSession: pool }).runTurn!;
+    try {
+      const initial = ownedRequest("caller");
+      const handle = ownedConversationHandle(initial, incoming, provider)!;
+      await pool.open({ handle, sessionId: "" });
+      const session = pool.entries.get(handle)!;
+      session.capture = false;
+      const first: AdapterEvent[] = [];
+      await run(initial, incoming, event => first.push(event));
+      expect(first).toMatchObject([{ type: "done", stopReason: "stop" }]);
+      await session.close();
+      pool.entries.delete(handle);
+
+      const next = ownedRequest("caller", [...user]);
+      if (evidence === "response id") next.previousResponseId = "resp_prior";
+      if (evidence === "assistant history") {
+        next.context.messages.push({ role: "assistant", content: [{ type: "text", text: "previous answer" }], timestamp: 1 },
+          { role: "user", content: "follow up", timestamp: 2 });
+      }
+      if (evidence === "tool result") {
+        next.context.messages.push({
+          role: "toolResult", toolCallId: "call-1", toolName: "shell", content: "prior result", isError: false, timestamp: 2,
+        });
+      }
+
+      const continuation: AdapterEvent[] = [];
+      await run(next, incoming, event => continuation.push(event));
+      expect(continuation).toMatchObject([{ type: "error", code: "step_cli_conversation_expired", status: 409, retryable: false }]);
+      expect(pool.entries.size).toBe(0);
+
+      // A thread ID appears on first requests too. User-only input can still open a session.
+      await run(ownedRequest("caller"), incoming, () => {});
+      expect(pool.entries.get(handle)?.inputs).toHaveLength(1);
+    } finally {
+      await pool.closeAll();
+    }
+  },
+);
 
 describe("StepCode tool-result matching", () => {
   test("reports which call the newest result answers", () => {
