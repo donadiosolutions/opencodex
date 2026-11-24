@@ -84,6 +84,9 @@ leaders are still observed alive and starts any Windows tree kills still in the 
 If the group operation fails, the sweep can still signal the leader through its child handle
 and reports the tree cleanup as incomplete.
 
+Turns run in arrival order within each conversation, with up to two additional turns waiting.
+Completing a turn immediately frees a slot while the rest of the queue drains.
+
 ## Tools arrive as inline SDK tools, not an MCP catalog
 
 The client's catalog is projected into `query.start.options.sdkTools` (`tool-bridge.ts`), each

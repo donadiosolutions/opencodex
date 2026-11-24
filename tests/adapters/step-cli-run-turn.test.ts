@@ -727,6 +727,28 @@ describe("StepCode conversation queue", () => {
     expect(peak).toBe(2);
   });
 
+  test("a completed turn frees a slot while later turns are still queued", async () => {
+    const firstGate = Promise.withResolvers<void>();
+    const secondGate = Promise.withResolvers<void>();
+    const order: number[] = [];
+    const enqueue = (position: number, gate = Promise.resolve()) =>
+      withConversationLock("capacity", async () => {
+        await gate;
+        order.push(position);
+      });
+
+    const first = enqueue(1, firstGate.promise);
+    const second = enqueue(2, secondGate.promise);
+    const third = enqueue(3);
+    firstGate.resolve();
+    await first;
+
+    const fourth = enqueue(4);
+    secondGate.resolve();
+    await Promise.all([second, third, fourth]);
+    expect(order).toEqual([1, 2, 3, 4]);
+  });
+
   test("a pile-up past the cap is refused instead of queued forever", async () => {
     // The refusal is the only thing standing between a retry storm and an unbounded wait, so it has to
     // be a refusal rather than another queue slot: the holder plus MAX_QUEUED_TURNS waiters are

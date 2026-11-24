@@ -72,8 +72,8 @@ export const MAX_QUEUED_TURNS = 2;
  */
 
 interface ConversationLock {
-  /** Settles when every queued turn ahead of this one has finished. */
-  readonly chain: Promise<void>;
+  /** Settles when every admitted turn has finished. */
+  tail: Promise<void>;
   /** Turns waiting or running; used to refuse an unbounded pile-up. */
   waiters: number;
 }
@@ -125,33 +125,26 @@ export class ConversationQueueFullError extends Error {
  * rather than degrades, and it has to be observable to be trusted.
  */
 export async function withConversationLock<T>(handle: string, task: () => Promise<T>): Promise<T> {
-  const existing = conversationLocks.get(handle);
-  if (existing && existing.waiters >= MAX_QUEUED_TURNS + 1) {
+  const entry = conversationLocks.get(handle) ?? { tail: Promise.resolve(), waiters: 0 };
+  if (entry.waiters >= MAX_QUEUED_TURNS + 1) {
     throw new ConversationQueueFullError(
-      `StepCode serves one turn per conversation at a time and ${existing.waiters} are already queued for this one.`,
+      `StepCode serves one turn per conversation at a time and ${entry.waiters} are already queued for this one.`,
     );
   }
-  const previous = existing?.chain ?? Promise.resolve();
+  const previous = entry.tail;
   let release!: () => void;
   const gate = new Promise<void>(resolve => {
     release = resolve;
   });
-  const chain = previous.then(
-    () => gate,
-    () => gate,
-  );
-  const entry: ConversationLock = { chain, waiters: (existing?.waiters ?? 0) + 1 };
+  entry.tail = previous.then(() => gate);
+  entry.waiters += 1;
   conversationLocks.set(handle, entry);
-  void chain.finally(() => {
-    // Drop the entry once this turn's chain drains, unless a later turn already replaced it — otherwise
-    // the map would retain one settled promise per conversation handle for the life of the process.
-    if (conversationLocks.get(handle) === entry) conversationLocks.delete(handle);
-  });
-  await previous.catch(() => undefined);
+  await previous;
   try {
     return await task();
   } finally {
     entry.waiters -= 1;
+    if (entry.waiters === 0) conversationLocks.delete(handle);
     release();
   }
 }
