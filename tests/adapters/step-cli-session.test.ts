@@ -5,6 +5,10 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, test } from "bun:test";
 
+import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
+import { sessionHandlers } from "../../src/adapters/step-cli/events";
+import type { AdapterEvent } from "../../src/types";
+import { incoming, parsed, provider } from "../helpers/step-cli-ownership";
 import { StepSessionPool } from "../../src/adapters/step-cli/session-pool";
 import {
   StepCliSession,
@@ -41,6 +45,7 @@ class FakeStep {
   #buffer = Buffer.alloc(0);
   /** When false the peer stays silent, so a test can drive the exchange by hand. */
   scripted = true;
+  exitOnInput = false;
 
   constructor() {
     const stdin = new PassThrough() as PassThrough & { writable: boolean };
@@ -76,6 +81,12 @@ class FakeStep {
     );
   }
 
+  exit(): void {
+    this.child.exitCode = 1;
+    this.child.emit("exit", 1, null);
+    this.child.emit("close", 1, null);
+  }
+
   /** Answer each newly written request once: initialize, query.start and query.input. */
   #answer(): void {
     while (this.#scriptCursor < this.written.length) {
@@ -99,7 +110,8 @@ class FakeStep {
         continue;
       }
       if (frame.method === "query.input") {
-        this.emit({ kind: "response", id: `r_${frame.id}`, replyTo: frame.id, payload: { accepted: true } });
+        if (this.exitOnInput) this.exit();
+        else this.emit({ kind: "response", id: `r_${frame.id}`, replyTo: frame.id, payload: { accepted: true } });
       }
     }
   }
@@ -134,6 +146,61 @@ async function openSession(fake: FakeStep, deps: StepSessionDeps = {}) {
   );
   return { session, events };
 }
+
+test.each(["before input acknowledgement", "after input acknowledgement", "after a terminal frame"] as const)(
+  "a StepCode child exit %s settles the turn once",
+  async phase => {
+    const fake = new FakeStep();
+    fake.exitOnInput = phase === "before input acknowledgement";
+    const { promise: waitingForTerminal, resolve: markWaitingForTerminal } = Promise.withResolvers<void>();
+    const pool = new StepSessionPool(
+      { buildOptions: () => options(), idleTimeoutMs: 60_000, openCodexHome: "/tmp" },
+      sessionHandlers,
+      { spawn: () => fake.child },
+    );
+    const adapter = createStepCliAdapter(provider, {
+      openSession: pool,
+      setTimeout: (callback, delay) => {
+        markWaitingForTerminal();
+        return setTimeout(callback, delay);
+      },
+    });
+    const controller = new AbortController();
+    const events: AdapterEvent[] = [];
+    const run = adapter.runTurn!(parsed("exit-caller"), { ...incoming, abortSignal: controller.signal }, e => events.push(e));
+    try {
+      if (!fake.exitOnInput) {
+        await waitingForTerminal;
+        expect(fake.written.at(-1)?.method).toBe("query.input");
+        if (phase === "after a terminal frame") {
+          fake.emit({
+            kind: "event", id: "evt", method: "query.message", sequence: 1,
+            payload: { queryId: "q_1", message: { type: "status", status: "turn_complete" } },
+          });
+        }
+        fake.exit();
+        const settled = await Promise.race([
+          run.then(() => true),
+          new Promise<false>(resolve => setImmediate(() => resolve(false))),
+        ]);
+        expect(settled).toBe(true);
+      }
+      await run;
+      if (phase === "after a terminal frame") {
+        expect(events).toMatchObject([{ type: "done", stopReason: "stop" }]);
+      } else {
+        expect(events).toEqual([{
+          type: "error", code: "step_cli_session_failed", errorType: "upstream_error",
+          message: "StepCode exited before the turn settled.", status: 502, retryable: true,
+        }]);
+      }
+    } finally {
+      controller.abort();
+      try { await run; }
+      finally { await pool.closeAll(); }
+    }
+  },
+);
 
 describe("StepCode session", () => {
   test("refuses to spawn when the workspace cannot be created", async () => {

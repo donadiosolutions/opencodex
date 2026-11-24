@@ -1,4 +1,5 @@
 import type { AdapterEvent } from "../../types";
+import { mapSessionFailure } from "./errors";
 import type { StepSessionEvent } from "./session";
 import type { StepConversationSession } from "./session-pool";
 import { asRecord, continuationFor, toUsage } from "./projection";
@@ -217,6 +218,14 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
 }
 
 export const sessionHandlers = {
+  onTermination(session: StepConversationSession, failure: Error): void {
+    const turn = currentTurn(session);
+    if (!turn) return;
+    endTurn(session);
+    forgetQuery(session);
+    turn.settle();
+    turn.emit(mapSessionFailure(failure));
+  },
   onEvent(event: StepSessionEvent): void {
     if (event.type === "reverse_request") {
       handleReverseRequest(event.session, event.frame);

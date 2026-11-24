@@ -15,7 +15,7 @@ import {
   stepCliProcessEnvironment,
   StepSessionError,
   type StepSessionDeps,
-  type StepSessionEvent,
+  type StepSessionHandlers,
 } from "./session";
 import {
   StepSessionPool,
@@ -135,7 +135,7 @@ function forceStepCliShutdown(): void {
 export function poolFor(
   home: string,
   deps: StepSessionDeps,
-  handlers: { onEvent(event: StepSessionEvent): void },
+  handlers: StepSessionHandlers,
 ): StepSessionPool {
   if (didRunDrainStartHooks() || didRunOptionalShutdownHooks()) throw new StepSessionError("StepCode cannot open sessions while the proxy is shutting down.");
   const existing = pools.get(home);

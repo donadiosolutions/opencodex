@@ -20,8 +20,9 @@ and its result cannot be replayed through the wire: StepCode's conversation cont
 its own process. `conversation.ts` namespaces thread/affinity handles by the server's admitted
 `_reasoningReplayScope.clientPrincipalId` and physical provider identity. Headers and `providerState`
 cannot supply that authority. Requests without an admitted principal receive a private process that
-closes when the request ends; they cannot continue a held call across requests. A process that dies
-is reported rather than restarted — a restart
+closes when the request ends; they cannot continue a held call across requests. When the child
+connection terminates, the active turn emits a transport error and settles even after all protocol
+requests have been acknowledged. The pool continues to own cleanup independently. Restarting
 would lose tool results the client already delivered, which this route cannot replay from a
 transcript.
 
@@ -32,6 +33,7 @@ that query's declared catalog. Other permissions are denied. A
 `sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
+An unrelated tool result without fresh user text leaves the original held call available.
 After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
 also stops new query starts, busy retries and input that has yet to be sent.
 

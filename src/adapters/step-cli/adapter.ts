@@ -277,6 +277,7 @@ async function driveTurn(
       // abandoned the call still carries the user's message and must keep it.
       const userText = continuedQuery ? undefined : pendingUserText(parsed);
       if (!continuedQuery && !userText) {
+        if (held) sessions.rememberHeldTool(ref, held);
         emit(
           refusal(
             "StepCode carries conversation history inside its own process, so a turn must end with either user text or a tool result.",
@@ -345,6 +346,7 @@ async function driveTurn(
             sdkTools: tools.sdkTools,
             streamingInput: true,
           }, incoming.abortSignal);
+          if (!currentTurn(session)) return;
           if (!started) {
             endTurn(session);
             settle();
@@ -357,7 +359,11 @@ async function driveTurn(
           }
         }
       } catch (error) {
-        endTurn(session);
+        // Protocol termination may already have settled the turn while rejecting this request.
+        if (!endTurn(session)) {
+          if (!session.closed) await session.close().catch(() => {});
+          return;
+        }
         settle();
         emit(mapSessionFailure(error));
         await session.close();

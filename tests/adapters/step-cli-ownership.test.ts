@@ -67,6 +67,28 @@ describe("StepCode caller ownership", () => {
     } finally { await pool.closeAll(); }
   });
 
+  test("an unrelated result without user text leaves the held call available", async () => {
+    const pool = host();
+    const adapter = createStepCliAdapter(provider, { openSession: pool });
+    const run = adapter.runTurn!;
+    const toolResult = (toolCallId: string) =>
+      parsed("principal-A", [{ role: "toolResult", toolCallId, content: "result", timestamp: 1 }]);
+    try {
+      await run(parsed("principal-A"), incoming, () => {});
+      const session = [...pool.entries.values()][0]!;
+      const rejected: AdapterEvent[] = [];
+      await run(toolResult("unrelated-call"), incoming, event => rejected.push(event));
+      expect(rejected).toMatchObject([{ type: "error", code: "step_cli_no_user_text" }]);
+      expect(session.delivered).toHaveLength(0);
+
+      const accepted: AdapterEvent[] = [];
+      await run(toolResult("call-1"), incoming, event => accepted.push(event));
+      expect(session.delivered).toHaveLength(1);
+      expect(session.next).toBe(1);
+      expect(accepted).toMatchObject([{ type: "done", stopReason: "stop" }]);
+    } finally { await pool.closeAll(); }
+  });
+
   test("a held result cannot change the owning query's tool catalog", async () => {
     const pool = host();
     const adapter = createStepCliAdapter(provider, { openSession: pool });

@@ -150,6 +150,7 @@ export type StepSessionEvent =
 
 export interface StepSessionHandlers {
   onEvent(event: StepSessionEvent): void;
+  onTermination?(session: StepCliSession, failure: Error): void;
 }
 
 /**
@@ -317,16 +318,12 @@ export class StepCliSession {
     child.on("error", error => {
       // A spawn failure such as ENOENT can emit `error` without a following `close`, so the sweep has to
       // be stopped here too or it lingers on a session that no longer exists.
-      this.#stopIdleSweep();
-      this.#failAll(error instanceof Error ? error : new Error(String(error)));
       if (child.pid === undefined) this.#child = undefined;
-      void this.close();
+      void this.#close(error);
     });
     child.on("close", () => {
       this.#leaderExited = true;
-      this.#failAll(new StepSessionError("StepCode exited before the turn settled."));
-      this.#stopIdleSweep();
-      void this.close();
+      void this.#close(new StepSessionError("StepCode exited before the turn settled."));
     });
     this.#installIdleSweep();
   }
@@ -339,8 +336,7 @@ export class StepCliSession {
     } catch (error) {
       // The runtime answers a frame it cannot parse with silence, so writing on into it would hang the
       // client for the whole request timeout. Fail every waiter and tear the process down instead.
-      this.#failAll(error instanceof StepProtocolViolation ? error : new Error(String(error)));
-      void this.close();
+      void this.#close(error instanceof StepProtocolViolation ? error : new Error(String(error)));
       return;
     }
     for (const frame of frames) this.#route(frame);
@@ -655,11 +651,15 @@ export class StepCliSession {
    * Reap the owned process tree before releasing this session. Concurrent callers share cleanup.
    */
   close(code = 0): Promise<void> {
+    return this.#close(new StepSessionError(`StepCode session closed (${code}).`));
+  }
+
+  #close(failure: Error): Promise<void> {
     if (this.#closePromise) return this.#closePromise;
     this.#closed = true;
     this.#stopIdleSweep();
     const child = this.#child;
-    this.#failAll(new StepSessionError(`StepCode session closed (${code}).`));
+    this.#failAll(failure);
     for (const held of this.#held.values()) this.#clearTimer(held.timer as never);
     this.#held.clear();
     // Publish the receipt before termination can emit close or notify pool bookkeeping.
@@ -674,6 +674,12 @@ export class StepCliSession {
       this.#announceExit();
     };
     void terminate().finally(() => clearTimeout(this.#shutdownTimer)).then(receipt.resolve, receipt.reject);
+    // A dead protocol can end the turn even if tree cleanup fails and the pool retains ownership.
+    try {
+      this.#handlers.onTermination?.(this, failure);
+    } catch {
+      // A turn's notification must not break the process close handler.
+    }
     return this.#closePromise;
   }
 
