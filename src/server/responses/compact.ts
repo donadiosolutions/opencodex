@@ -198,7 +198,7 @@ import {
   usageFromResponsesPayload,
   type RequestLogContext,
 } from "../request-log";
-import { noteCompactAttemptSend, sealCredentialRefusal } from "../credential-recovery-attempt";
+import { noteCredentialAttemptSend, sealCredentialRefusal } from "../credential-recovery-attempt";
 import type { AttemptRecoveryKind } from "../../usage/log";
 import {
   consumeForInspection,
@@ -1243,7 +1243,7 @@ export async function handleResponsesCompact(
                 init.signal ?? req.signal, connectMs(), false, dispatchFetch);
             } : undefined,
           onPhysicalDispatch: () => {
-            noteCompactAttemptSend(logCtx, route, sendProvider, receipt?.recovery ?? upstreamRecovery);
+            noteCredentialAttemptSend(logCtx, route, sendProvider, receipt?.recovery ?? upstreamRecovery);
             recordRouteAuth(logCtx, sendProvider.authMode, sendAuthCtx);
             receipt?.onDispatch?.();
           },

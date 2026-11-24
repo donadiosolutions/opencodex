@@ -1,6 +1,6 @@
 import type { CodexModelEntitlementSnapshot } from "../codex/model-entitlements";
 import { applyAccountModelMetadata } from "../codex/catalog/account-model-metadata";
-import { applyNativeAccessPrograms, applyNativeUltraFastTier } from "../codex/catalog/access-programs";
+import { applyNativeAccessPrograms, applyNativeRosterCapabilities, applyNativeUltraFastTier } from "../codex/catalog/access-programs";
 import { websocketsEnabled } from "../config";
 import { omitDisabledNativeCatalogEntries } from "../codex/catalog/native-omission";
 import type { OcxConfig } from "../types";
@@ -23,8 +23,7 @@ interface CodexModelListInput {
   accountSelectors: string[];
   suppressedBareNativeSlugs: ReadonlySet<string>;
   disabledModels: ReadonlySet<string>;
-  modelEntitlements?: CodexModelEntitlementSnapshot;
-  accountTargets?: ReadonlyMap<string, string>;
+  roster?: { snapshot: CodexModelEntitlementSnapshot; accountTargets: ReadonlyMap<string, string> };
   bareEligibleAccountIds?: ReadonlySet<string>;
 }
 
@@ -32,7 +31,7 @@ interface CodexModelListInput {
 export function buildCodexModelList({
   config, nativeSlugs, availableAccountNativeSlugs, accountNativeSlugs,
   accountNativeSlugsBySelector, goOrdered, exactComboSlugs, accountSelectors,
-  suppressedBareNativeSlugs, disabledModels, modelEntitlements, accountTargets, bareEligibleAccountIds,
+  suppressedBareNativeSlugs, disabledModels, roster, bareEligibleAccountIds,
 }: CodexModelListInput) {
   const catalogPath = readCodexCatalogPath();
   const nativeSource = {
@@ -40,6 +39,7 @@ export function buildCodexModelList({
     retainedBySlug: retainedNativeSourcePriorities(readCatalog(catalogPath)?.models ?? []),
   };
   const maMode = resolveMultiAgentMode(config);
+  const limits = nativeContextLimits(config);
   // Account rows include hidden supported ids so newly re-enabled natives reappear before sync.
   const catalogNativeSlugs = accountSelectors.length > 0
     ? [...new Set([...availableAccountNativeSlugs, ...accountNativeSlugs])]
@@ -47,11 +47,13 @@ export function buildCodexModelList({
   const entries = buildCatalogEntries(
     loadCatalogTemplate(), catalogNativeSlugs, goOrdered, config.subagentModels,
     websocketsEnabled(config), maMode, exactComboSlugs, accountSelectors,
-    suppressedBareNativeSlugs, new Set(), nativeContextLimits(config), accountNativeSlugs,
+    suppressedBareNativeSlugs, new Set(), limits, accountNativeSlugs,
     accountNativeSlugsBySelector, config.keepNativeChatGptOnV1 === true, config.modelPickerOrder,
     nativeSource, resolveRoutedCatalogDefaults(config),
   );
-  if (modelEntitlements && accountTargets) {
+  if (roster) {
+    const { snapshot: modelEntitlements, accountTargets } = roster;
+    applyNativeRosterCapabilities(entries, modelEntitlements, accountTargets, limits);
     applyAccountModelMetadata(entries, modelEntitlements, accountTargets, bareEligibleAccountIds);
     applyNativeAccessPrograms(entries, modelEntitlements, accountTargets);
     applyNativeUltraFastTier(entries, modelEntitlements, accountTargets, config.ultraFastTier === true, bareEligibleAccountIds);
