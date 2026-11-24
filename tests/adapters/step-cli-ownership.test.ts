@@ -91,6 +91,38 @@ describe("StepCode caller ownership", () => {
     } finally { await pool.closeAll(); }
   });
 
+  test("a matching held result and a new instruction can be retried separately", async () => {
+    const pool = host();
+    const run = createStepCliAdapter(provider, { openSession: pool }).runTurn!;
+    const result = parsed("principal-A", [
+      ...user,
+      { role: "toolResult", toolCallId: "call-1", toolName: "shell", content: "result", isError: false, timestamp: 1 },
+    ]);
+    const mixed = parsed("principal-A", [
+      ...result.context.messages,
+      { role: "user", content: "new instruction", timestamp: 2 },
+    ]);
+    try {
+      await run(parsed("principal-A"), incoming, () => {});
+      const session = [...pool.entries.values()][0]!;
+      const rejected: AdapterEvent[] = [];
+      await run(mixed, incoming, event => rejected.push(event));
+      expect(rejected).toMatchObject([{ type: "error", status: 400, code: "step_cli_mixed_tool_input" }]);
+      expect(session.delivered).toHaveLength(0);
+      expect(session.inputs).toHaveLength(1);
+
+      const accepted: AdapterEvent[] = [];
+      await run(result, incoming, event => accepted.push(event));
+      expect(session.delivered).toHaveLength(1);
+      expect(accepted).toMatchObject([{ type: "done", stopReason: "stop" }]);
+
+      session.capture = false;
+      await run(mixed, incoming, () => {});
+      expect(session.inputs).toHaveLength(2);
+      expect(session.inputs[1]?.text).toBe("new instruction");
+    } finally { await pool.closeAll(); }
+  });
+
   test("a held result cannot change the owning query's tool catalog", async () => {
     const pool = host();
     const adapter = createStepCliAdapter(provider, { openSession: pool });

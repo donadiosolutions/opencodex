@@ -282,9 +282,16 @@ async function driveTurn(
         return;
       }
 
-      // Text is suppressed ONLY when this turn really is the answer to the held call; a turn that
-      // abandoned the call still carries the user's message and must keep it.
-      const userText = continuedQuery ? undefined : pendingUserText(parsed, { requireNewTurn: held !== undefined });
+      const userText = pendingUserText(parsed, { requireNewTurn: held !== undefined });
+      if (held && heldMatches && userText) {
+        sessions.rememberHeldTool(ref, held);
+        emit(refusal(
+          "Send the held StepCode tool result first, then send the new user message in a separate request.",
+          400,
+          "step_cli_mixed_tool_input",
+        ));
+        return;
+      }
       if (!continuedQuery && !userText) {
         if (held) sessions.rememberHeldTool(ref, held);
         emit(

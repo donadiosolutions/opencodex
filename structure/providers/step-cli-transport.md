@@ -36,6 +36,8 @@ that query's declared catalog. Other permissions are denied. A
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
 An unrelated tool result leaves the original held call available unless a fresh user message follows it.
+A matching result followed by a fresh user message is refused with the hold intact. The client
+submits the result first and sends the new message in a separate request once the query completes.
 After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
 also stops new query starts, busy retries and input that has yet to be sent.
 
