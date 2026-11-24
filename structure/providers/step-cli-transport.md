@@ -31,7 +31,9 @@ open a new session because its payload cannot distinguish a fresh start from a c
 Events name the active turn's exact `queryId`. SDK reverse callbacks name the owning `sessionId`
 and carry a request ID allocated after the active query ID by the host's shared counter. If a
 callback also carries a query ID, it must match. Permissions require an owning turn and a tool in
-that query's declared catalog. Other permissions are denied. A
+that query's declared catalog. Other permissions are denied. A completion or terminal permission
+denial sends `query.input_end`. The conversation lock holds until the child acknowledges it or
+the pool closes the session after a failed acknowledgement. A
 `sdk_tool.invoke` is answered on the client's **next** request, with the original query and catalog.
 Changing the catalog while returning a held result closes the session. Abandoning a held call
 detaches its owner, interrupts it and confirms its input end before registering a replacement turn.
@@ -39,7 +41,9 @@ An unrelated tool result leaves the original held call available unless a fresh 
 A matching result followed by a fresh user message is refused with the hold intact. The client
 submits the result first and sends the new message in a separate request once the query completes.
 After acquiring the conversation lock, a cancelled turn leaves held state untouched. Cancellation
-also stops new query starts, busy retries and input that has yet to be sent.
+also stops new query starts, busy retries and input that has yet to be sent. An abandoned running
+turn closes its session even when interruption fails. The pool retains a failed cleanup receipt
+and the client receives only the original terminal error.
 
 Child response errors are classified at the transport boundary. The adapter emits locally defined
 error codes and messages for login failures, subscription limits, busy queries, timeouts and

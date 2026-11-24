@@ -45,7 +45,7 @@ export interface StepTurnRuntime {
   ref: StepConversationRef;
   pool: StepConversationHost;
   emit: (event: AdapterEvent) => void;
-  settle: () => void;
+  settle: (queryCleanup?: Promise<void>) => void;
   emittedNames: Map<string, string>;
   catalogKey: string;
   queryId?: string;

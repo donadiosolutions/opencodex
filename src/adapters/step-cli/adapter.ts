@@ -205,8 +205,9 @@ export function createStepCliAdapter(
         emit(mapSessionFailure(error));
         await session.close();
       } finally {
-        // Keyless callers have no cross-request ownership proof. Their process is request-local.
-        if (!identified) await session.close();
+        // Keyless callers have no cross-request ownership proof. The pool owns their cleanup
+        // receipt even when the stream already emitted its terminal event.
+        if (!identified) await session.close().catch(() => {});
       }
     },
   };
@@ -316,10 +317,7 @@ async function driveTurn(
         await session.endInput(held.queryId);
       }
 
-      let settle!: () => void;
-      const done = new Promise<void>(resolve => {
-        settle = resolve;
-      });
+      const { promise: done, resolve: settle } = Promise.withResolvers<void>();
       beginTurn(session, {
         ref,
         pool: sessions,
@@ -378,6 +376,7 @@ async function driveTurn(
         // Protocol termination may already have settled the turn while rejecting this request.
         if (!endTurn(session)) {
           if (!session.closed) await session.close().catch(() => {});
+          await done;
           return;
         }
         settle();
@@ -397,13 +396,18 @@ async function driveTurn(
         }),
       ]);
       clearTimer(deadlineTimer as never);
-      if (currentTurn(session) === undefined) return;
+      if (currentTurn(session) === undefined) {
+        // Abort or deadline can win the race while a terminal event is still releasing the query.
+        await done;
+        return;
+      }
 
       // The turn is still registered, so nothing terminated it: either the client aborted, or the CLI
       // went quiet. Either way the query is still running inside StepCode, and since it serves one
       // query at a time the NEXT request for this conversation would be rejected or blocked by it.
-      // Interrupt it, and close the session when the interrupt cannot be confirmed.
+      // Interrupt it when this turn started it, then close the session to free its query slot.
       endTurn(session);
+      forgetQuery(session);
       emit({
         type: "error",
         message: "The StepCode turn ended without a terminal event.",
@@ -413,11 +417,10 @@ async function driveTurn(
         retryable: true,
       });
       settle();
-      if (queryId) {
-        await session.interrupt(queryId);
-        if (session.closed) return;
-      }
-      await session.close();
+      if (queryId) await session.interrupt(queryId).catch(() => {});
+      // The pool owns the cleanup receipt. An interrupt or cleanup failure cannot emit a
+      // second error after the abandonment event.
+      await session.close().catch(() => {});
 }
 
 export { STEP_CLI_PROFILE, clearStepCliSessions };

@@ -388,6 +388,46 @@ describe("StepCode query lifecycle", () => {
     expect(session.inputEnds).toEqual(["q_1"]);
   });
 
+  test.each(["turn_complete", "permission_denied"] as const)(
+    "a queued turn waits for input-end acknowledgement after %s even if the first client aborts",
+    async terminal => {
+      const session = new FakeSession();
+      const adapter = createStepCliAdapter(provider(), { openSession: host(session) });
+      const controller = new AbortController();
+      const firstTerminal = Promise.withResolvers<void>();
+      const firstInputEnded = Promise.withResolvers<void>();
+      const endInput = session.endInput.bind(session);
+      session.endInput = async queryId => {
+        await endInput(queryId);
+        if (queryId === "q_1") await firstInputEnded.promise;
+      };
+      session.stream = [terminal === "permission_denied" ? eventFrame({ type: terminal }) : TURN_COMPLETE];
+      const events: AdapterEvent[] = [];
+      const first = adapter.runTurn!(parsed(USER_ASK), { ...THREAD_META, abortSignal: controller.signal }, event => {
+        events.push(event);
+        firstTerminal.resolve();
+      });
+      await firstTerminal.promise;
+      controller.abort();
+      session.stream = [TURN_COMPLETE];
+      const nextEvents: AdapterEvent[] = [];
+      const next = adapter.runTurn!(parsed(USER_ASK), THREAD_META, event => nextEvents.push(event));
+      try {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        expect(session.inputEnds).toEqual(["q_1"]);
+        expect(session.queries.map(query => query.queryId)).toEqual(["q_1"]);
+      } finally {
+        firstInputEnded.resolve();
+        await Promise.all([first, next]);
+      }
+      expect(events).toMatchObject(terminal === "permission_denied"
+        ? [{ type: "error", code: "step_cli_permission_denied" }]
+        : [{ type: "done", stopReason: "stop" }]);
+      expect(nextEvents).toMatchObject([{ type: "done", stopReason: "stop" }]);
+      expect(session.inputEnds).toEqual(["q_1", "q_2"]);
+    },
+  );
+
   test("a captured tool call keeps its query open for the result", async () => {
     // The opposite requirement: ending the input here would let the runtime finish the query before the
     // client's tool result arrives, and the model would never see it.
@@ -838,6 +878,39 @@ describe("StepCode abandoned-turn recovery", () => {
 
     expectRecovered(events, session);
   });
+
+  test.each(["confirmed", "failed"] as const)(
+    "a failed abort interrupt emits once and still closes the session when cleanup is %s",
+    async cleanup => {
+      const session = new FakeSession();
+      const timers = manualTimers();
+      const adapter = createStepCliAdapter(provider(), {
+        openSession: host(session), setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+      });
+      const interrupt = session.interrupt.bind(session);
+      session.interrupt = async queryId => {
+        await interrupt(queryId);
+        throw new Error("synthetic interrupt failure");
+      };
+      const close = session.close.bind(session);
+      let closes = 0;
+      session.close = async () => {
+        closes += 1;
+        await close();
+        if (cleanup === "failed") throw new Error("synthetic close receipt failure");
+      };
+      const controller = new AbortController();
+      const events: AdapterEvent[] = [];
+      const turn = adapter.runTurn!(parsed(USER_ASK), { ...THREAD_META, abortSignal: controller.signal }, event => events.push(event));
+      await untilArmed(timers);
+      controller.abort();
+      await turn;
+
+      expectRecovered(events, session);
+      expect(events).toMatchObject([{ type: "error", code: "step_cli_turn_abandoned" }]);
+      expect(closes).toBe(1);
+    },
+  );
 
   test("the terminal deadline recovers the same way when no abort arrives", async () => {
     const session = new FakeSession();

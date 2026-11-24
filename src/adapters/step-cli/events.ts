@@ -10,6 +10,7 @@ import {
   endTurn,
   forgetQuery,
   recordAssistantUsage,
+  type StepTurnRuntime,
 } from "./registry";
 import { resolveStepToolName } from "./tool-bridge";
 import type { StepFrame } from "./stdio-frames";
@@ -128,6 +129,15 @@ export function handleReverseRequest(session: StepConversationSession, frame: St
   session.denyPermission(frame, `OpenCodex does not handle ${frame.method ?? "this request"}.`);
 }
 
+function finishQuery(session: StepConversationSession, turn: StepTurnRuntime, queryId: string, event: AdapterEvent): void {
+  endTurn(session);
+  forgetQuery(session);
+  // The conversation lock holds until the input end is acknowledged or the session is closed.
+  // The pool retains any failed close receipt and quarantines the handle.
+  turn.settle(session.endInput(queryId).catch(() => session.close()).catch(() => {}));
+  turn.emit(event);
+}
+
 /**
  * Map one runtime frame onto the client's event stream.
  *
@@ -184,27 +194,17 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
 
   if (type === "status" && (message.status === "turn_complete" || message.status === "done")) {
     const usage = assistantUsage(session);
-    turn.emit({
+    finishQuery(session, turn, turn.queryId, {
       type: "done",
       ...(usage ? { usage } : {}),
       stopReason: "stop",
       providerState: continuationFor(turn.ref, session.sessionId),
     });
-    endTurn(session);
-    turn.settle();
-    // Release the runtime's single query slot for this conversation's next turn. Skipped when a tool
-    // call was captured, which ends the turn earlier and keeps the query alive on purpose.
-    const queryId = currentQuery(session);
-    if (queryId) {
-      forgetQuery(session);
-      // Observe the derived rejection here. The pool can still await the session's cleanup receipt.
-      void session.endInput(queryId).catch(() => session.close()).catch(() => {});
-    }
     return;
   }
 
   if (type === "permission_denied") {
-    turn.emit({
+    finishQuery(session, turn, turn.queryId, {
       type: "error",
       message: "StepCode refused a tool call.",
       status: 400,
@@ -212,8 +212,6 @@ export function handleRuntimeEvent(session: StepConversationSession, frame: Step
       code: "step_cli_permission_denied",
       retryable: false,
     });
-    endTurn(session);
-    turn.settle();
   }
 }
 
