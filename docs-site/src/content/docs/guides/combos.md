@@ -20,7 +20,7 @@ if `provider/model` selectors are new to you.
 In **Models → Combos**, choose **OpenAI first** or **Claude first** when both subscription and API
 providers are available. Each preset starts with the selected subscription and its API key, then
 adds the other subscription and its API key. Drag a target by its handle or use its arrow buttons
-to reorder it. The **Fallback preview** identifies the first blocked step and shows the steps
+to reorder it. The editor keeps the positions of targets you add or replace when a concurrent saved edit leaves the target order intact. The **Fallback preview** identifies the first blocked step and shows the steps
 beyond it. The paid-call switch sits below the preview status and starts off for both presets.
 Use **Subscriptions only** when creating a preset to remove both API targets.
 Send requests to the saved `combo/openai-first` or `combo/claude-first` to use the route.

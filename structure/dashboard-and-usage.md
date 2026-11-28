@@ -468,7 +468,7 @@ expire within 30 minutes; exhaustion may expire earlier when the runtime predica
 `gui/src/combo-workspace-data.ts` accepts only this projection for quota-based Save/Create blocking.
 Missing, invalid or expired evidence is unknown. `gui/src/pages/Combos.tsx` wakes at the rendered
 expiry, including a deadline crossed before effects run, rechecks activation and visibility, and
-refreshes quota with Combo data while preserving drafts. Each successful quota snapshot also
+refreshes quota with Combo data while preserving drafts. `gui/src/components/combo-workspace-merge.ts` keeps draft insertions and replacements in place when the saved order of shared targets stays the same. Each successful quota snapshot also
 advances the observation clock, so a retained older row cannot defer evaluation of a fresh row.
 
 Optional Codex transport-hint suppression is scoped to canonical Responses client output;

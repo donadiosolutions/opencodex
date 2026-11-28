@@ -550,6 +550,20 @@ test("divergent target reorders conflict while one-sided reorders merge", () => 
   expect(remoteOnly.merged.targets.map(t => t.model)).toEqual(["a", "c", "b"]);
 });
 
+test.each([
+  { change: "replacement", models: ["x", "b"] },
+  { change: "insertion", models: ["a", "x", "b"] },
+])("remote metadata edits preserve a draft target $change in place", ({ models }) => {
+  const targets = (ids: string[]) => ids.map(model => ({ provider: "openai", model }));
+  const previous = { ...combos[0]!, targets: targets(["a", "b"]) };
+  const draft = { ...previous, targets: targets(models) };
+  const remote = { ...previous, displayName: "Remote" };
+  const result = mergeComboDraft(previous, draft, remote);
+  expect(result.conflicts).toEqual([]);
+  expect(result.merged.displayName).toBe("Remote");
+  expect(result.merged.targets.map(target => target.model)).toEqual(models);
+});
+
 test("reconciliation preserves multiple unsaved blank target rows in place", () => {
   const configured = { provider: "openai", model: "a", clientKey: "saved" };
   const blank1 = { provider: "", model: "", clientKey: "new-1" };

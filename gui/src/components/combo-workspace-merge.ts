@@ -63,7 +63,9 @@ function mergeTargets(previous: ComboTarget[], draft: ComboTarget[], remote: Com
   const remoteReordered = !sameOrder(baselineOrder, theirOrder);
   const orderConflict = !sameOrder(baselineOrder, myOrder) && remoteReordered && !sameOrder(myOrder, theirOrder);
   const hasIncomplete = draft.some(target => !target.provider.trim() || !target.model.trim());
-  const order = reordered || (hasIncomplete && !remoteReordered) ? [...draft, ...remote] : [...remote, ...draft];
+  const hasDraftAddition = [...local.keys()].some(key => !old.has(key));
+  const order = reordered || ((hasIncomplete || hasDraftAddition) && !remoteReordered)
+    ? [...draft, ...remote] : [...remote, ...draft];
   const targets: ComboTarget[] = [];
   for (const item of order) {
     const key = identity(item);
