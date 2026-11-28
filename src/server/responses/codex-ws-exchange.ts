@@ -13,10 +13,12 @@ import { CodexWsCorrelation } from "./codex-ws-correlation";
 import type { CodexWsSession } from "./codex-ws-session";
 import { completedCodexWsContinuation, CodexWsOutputEvidence, type CodexWsContinuationDecisionReason } from "./codex-ws-continuation";
 import type { ProviderFetchOptions, TransportObservation } from "./fetch-helpers";
+import { captureSendAdmission } from "./send-admission";
 import { UPGRADE_DEADLINE_MS, CODEX_WS_LIVENESS_PING_INTERVAL_MS, CODEX_WS_RESPONSE_PRELUDE_TIMEOUT_MS,
   CODEX_WS_COMMITTED_SILENT_INTERVALS, MAX_CODEX_WS_FRAME_BYTES,
   MAX_CODEX_WS_QUEUE_BYTES, markCodexWsResponse, markCodexWsPreludeProjection, normalizeResponsesWsRelayEvent, closedBeforeTerminalMessage,
-  codexWsCreateFrameExceedsLimit, codexWsFailureDetail, codexWsPreResponseFailure, markCodexWsStage, codexWsOcxVersion,
+  codexWsCreateFrameExceedsLimit, codexWsFrameExceedsAdvertisedLimit, codexWsFailureDetail, codexWsPreResponseFailure,
+  markCodexWsStage, codexWsOcxVersion,
   markCodexWsSocketDeath, codexWsWrapperStatus, isCodexWsTerminalEvent, type CodexWsFailureStage, type CodexWsStageRecord,
   type CodexWsTerminalEvent, codexWsPreOutputRefusalStatus, isEmptyCodexWsLifecycleEvent, codexWsFrameResponseIds,
   markCodexWsPreOutputRefusal, responsesFrameIsReplayUnsafe, type CodexWsPreOutputRefusalHold } from "./codex-ws-wire";
@@ -136,7 +138,7 @@ function refusalErrorBody(source: unknown): Record<string, string> {
 
 /** The sole SSE exchange state machine for both one-shot and retained sockets. */
 export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
-  const { session, url, init, prepared, sseFallback, onQuota, beforeDispatch, onTransport,
+  const { session, url, init, prepared, onQuota, beforeDispatch, onTransport,
     bunVersion, nativeControl, beforeContinuation, preOutputRefusalHold } = options;
   const metadataContext = options.metadataContext ?? {};
   const observe = (event: TransportObservation): void => {
@@ -148,6 +150,11 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
   let recoveryAdmissionPending = false;
   const signal = init.signal ?? undefined;
   if (!session.opened) observe({ kind: "connect", connectionId: session.connectionId, generation: session.generation });
+  // Socket callbacks run outside the request's async context, so its send admission is bound here,
+  // for the frames and for the HTTP fallbacks those callbacks start.
+  const admission = captureSendAdmission();
+  const sseFallback = ((input: Parameters<typeof globalThis.fetch>[0], fallbackInit?: RequestInit) =>
+    admission.run(() => options.sseFallback(input, fallbackInit))) as typeof globalThis.fetch;
   return new Promise<Response>((resolve, reject) => {
     const ws = session.socket;
 
@@ -525,6 +532,18 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         sequence: ++session.requestSequence, generation: session.generation,
         ageMs: Math.max(0, performance.now() - session.createdMonotonic) };
       observe({ kind: "open", ...connection });
+      // A frame above this connection's advertised ceiling never leaves. Since nothing was sent,
+      // the HTTP resend cannot double-generate; native control has no HTTP equivalent.
+      if (!signal?.aborted && codexWsFrameExceedsAdvertisedLimit(frameText, session.advertisedMessageLimit())) {
+        settledPreOpen = true;
+        terminal = true;
+        cleanup();
+        session.dispose();
+        if (nativeControl) {
+          reject(new Error("Codex WebSocket request exceeds the upstream's advertised message limit; native control requires the WebSocket transport"));
+        } else resolve(sseFallback(url, init));
+        return;
+      }
       try {
         beforeDispatch?.(new Headers(headers));
       } catch (error) {
@@ -571,8 +590,10 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               }
               const text = JSON.stringify(outgoing);
               nativeControl.assertOutboundFrame?.(text);
-              if (codexWsCreateFrameExceedsLimit(text)) {
-                throw new Error("Native steering frame exceeds the transport byte limit");
+              if (codexWsCreateFrameExceedsLimit(text) || codexWsFrameExceedsAdvertisedLimit(text, session.advertisedMessageLimit())) {
+                // A typed refusal is a known non-delivery: the channel rolls the frame back so a
+                // corrected one can be queued, instead of failing as an unknown delivery.
+                throw new NativeSteeringError("invalid_input", "Native steering frame exceeds the transport byte limit");
               }
               return { outgoing, text };
             };
@@ -581,6 +602,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               if (terminal || signal?.aborted || session.closed || ws.readyState !== WebSocket.OPEN) {
                 throw new Error("Native steering connection is no longer available");
               }
+              admission.assert();
               beforeDispatch?.(new Headers(headers));
               if (frame.type === "response.create") {
                 // The exact serialized successor and its body, so admission can price the
@@ -612,6 +634,8 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
               ));
             } else sendControl();
           }, error => failStream(error, "protocol_error"));
+          // Only the owner whose attach succeeded sets the limit; a refused second attach changes nothing.
+          nativeControl.setTransportMessageLimit?.(session.advertisedMessageLimit());
         }
       } catch (error) {
         // An attach failure is an ownership conflict, not a failed send: no frame
@@ -621,7 +645,10 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
         failStream(error, "protocol_error");
         return;
       }
-      try { options.onPhysicalDispatch?.(frameText); } catch (error) {
+      try {
+        admission.assert();
+        options.onPhysicalDispatch?.(frameText);
+      } catch (error) {
         // Admission refused before the frame left. This is a pre-open rejection,
         // not a transport failure and not an authorization to replay over SSE.
         settledPreOpen = true;
@@ -777,7 +804,8 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
             if (terminal || responseCommitted) return;
             if (signal?.aborted) { onAbort(); return; }
             const send = async () => {
-              if (codexWsCreateFrameExceedsLimit(fullFrameText)) {
+              if (codexWsCreateFrameExceedsLimit(fullFrameText)
+                || codexWsFrameExceedsAdvertisedLimit(fullFrameText, session.advertisedMessageLimit())) {
                 terminal = true;
                 cleanup();
                 session.dispose();
@@ -786,6 +814,7 @@ export function codexWsExchange(options: ExchangeOptions): Promise<Response> {
                 resolve(await sseFallback(url, init));
                 return;
               }
+              admission.assert();
               beforeDispatch?.(new Headers(headers));
               if (signal?.aborted) { onAbort(); return; }
               // The recovery is the full create, so that is the frame the replay guard records.

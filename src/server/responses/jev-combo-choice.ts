@@ -1,4 +1,4 @@
-import { getCombo, targetKey, type JevCandidate } from "../../combos";
+import { getCombo, JEV_PROVIDER_ID, pickComboTarget, targetKey, type ComboPick, type JevCandidate } from "../../combos";
 import { isCodexReasoningEffort } from "../../reasoning-effort";
 import { routeConcreteModel } from "../../router";
 import { supportedLadderFor } from "../effort-policy";
@@ -36,4 +36,53 @@ export function jevChoiceEfforts(
   // An explicit allowlist is restrictive. If catalog capabilities drift until no configured
   // effort remains supported, omit the target instead of silently broadening JEV's choices.
   return configuredEfforts !== undefined && reasoningEfforts.length === 0 ? undefined : { reasoningEfforts, quotaIdentity };
+}
+
+export interface JevComboChoice {
+  pick: ComboPick;
+  candidate: JevCandidate;
+}
+
+/** Enumerate this request's eligible targets without reserving another recovery pass. */
+export function eligibleJevComboChoices(
+  config: OcxConfig,
+  comboId: string,
+  eligible: (target: NonNullable<ReturnType<typeof getCombo>>["targets"][number]) => boolean,
+  now: number,
+  cooldownReprobeTargets?: ComboPick["cooldownReprobeTargets"],
+): JevComboChoice[] {
+  const combo = getCombo(config, comboId);
+  if (!combo) return [];
+  const excluded = new Set<string>();
+  const choices: JevComboChoice[] = [];
+  const reserved = cooldownReprobeTargets ? Object.entries(cooldownReprobeTargets) : undefined;
+  while (excluded.size < combo.targets.length) {
+    const pick = pickComboTarget(config, comboId, {
+      exclude: excluded, eligible, now, allowCooldownReprobe: false, cooldownReprobeTargets: reserved,
+    });
+    if (!pick) break;
+    const key = targetKey(pick.target);
+    excluded.add(key);
+    // The TypeSafe row owns a decision credential, not an inference transport.
+    if (pick.target.provider === JEV_PROVIDER_ID) continue;
+    const identity = jevChoiceEfforts(config, pick.target, combo.decisionQuotaSignals === true);
+    if (!identity) continue;
+    choices.push({
+      pick: { ...pick, attempted: [key] },
+      candidate: {
+        key,
+        provider: pick.target.provider,
+        model: pick.target.model,
+        ...identity,
+        modelProfile: pick.target.modelProfile,
+      },
+    });
+  }
+  // #5691: the synchronous pick above does not defer emergency-only targets, so apply the
+  // same rule here — withhold them from JEV while any normal target is offered, never when
+  // they are all that remains.
+  if (combo.cooldownWaitPolicy === "before-last-resort" && choices.some(choice => !choice.pick.target.lastResort)) {
+    return choices.filter(choice => !choice.pick.target.lastResort);
+  }
+  return choices;
 }

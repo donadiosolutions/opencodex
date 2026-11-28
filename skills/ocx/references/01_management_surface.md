@@ -28,7 +28,7 @@ These answer in the CLI head and never reach the proxy, so they work with nothin
 | [lifecycle](01_surface_lifecycle.md) | 14 |
 | [providers-models](01_surface_providers-models.md) | 54 |
 | [accounts](01_surface_accounts.md) | 44 |
-| [agents-routing](01_surface_agents-routing.md) | 71 |
+| [agents-routing](01_surface_agents-routing.md) | 72 |
 | [integrations](01_surface_integrations.md) | 41 |
 | [observe-system](01_surface_observe-system.md) | 100 |
 | [telemetry](01_surface_telemetry.md) | 6 |
@@ -711,6 +711,10 @@ Original invocation order. These headings preserve links to the previous single-
 ### `ocx message mcp`
 
 [State-changing task](01_surface_agents-routing.md#ocx-message-mcp)
+
+### `ocx message claude-sessions`
+
+[Read-oriented task](01_surface_agents-routing.md#ocx-message-claude-sessions)
 
 ### `ocx advisor`
 

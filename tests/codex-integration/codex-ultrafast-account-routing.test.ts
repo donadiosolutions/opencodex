@@ -1,3 +1,4 @@
+import { bindCodexAccountEgressConfig, unbindCodexAccountEgressConfig } from "../../src/codex/account-egress-runtime";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -72,6 +73,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unbindCodexAccountEgressConfig();
   globalThis.fetch = originalFetch;
   clearThreadAccountMap();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
@@ -117,6 +119,7 @@ describe("Codex Ultrafast account selection", () => {
 
   test("headless Hub Pool authorization uses the live policy version and detours to the entitled account", async () => {
     const cfg = { ...config(), runtimeRole: "hub" as const, codexEntitlementClientVersion: "0.159.0" };
+    bindCodexAccountEgressConfig(cfg);
     const policy = { ...cfg, runtimeRole: "hub" as const, codexEntitlementClientVersion: HUB_CLIENT_VERSION };
     const versions: (string | null)[] = [];
     globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {

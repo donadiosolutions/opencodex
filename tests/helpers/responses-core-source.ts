@@ -45,6 +45,7 @@ export const RESPONSES_CORE_MODULES = [
   "deferred-send-reporter.ts",
   "combo-admission-snapshot.ts",
   "combo-requested-effort.ts",
+  "combo-send-budget.ts",
   "core-combo-native.ts",
   // Reached from core-combo.ts: tool-loop continuations stay on the lane's previous target (#7298).
   "combo-tool-loop-pin.ts",
@@ -56,8 +57,10 @@ export const RESPONSES_CORE_MODULES = [
   // Reached from core-combo.ts: JEV effort choices and resolved native quota identity.
   "jev-combo-choice.ts",
   "request-prepare.ts",
+  "request-prepare-direct-lane.ts",
+  "request-prepare-input.ts",
   "replay-owner.ts",
-  // Reached from request-prepare.ts and compact.ts: the eager Codex MCP catalog diagnostic (#8133).
+  // Reached from request-prepare-input.ts and compact.ts: the eager Codex MCP catalog diagnostic (#8133).
   "codex-tool-catalog.ts",
   // Reached from codex-tool-catalog.ts: the rendered Code Mode exec section parser.
   "code-mode-collab-surface.ts",
@@ -94,6 +97,8 @@ export const RESPONSES_CORE_MODULES = [
   "spend-storage-error.ts",
   // Reached from passthrough dispatch: local pacing refusals retain 429 and Retry-After.
   "pacing-overload.ts",
+  // Reached from core.ts, the Combo loop and the physical send: Combo admission checked again at the send.
+  "send-admission.ts",
   "reset-replay.ts",
   "passthrough-delivery.ts",
   // Reached from passthrough-delivery.ts: buffered combo children must honor a required tool_choice (#7456).

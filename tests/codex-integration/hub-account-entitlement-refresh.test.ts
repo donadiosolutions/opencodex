@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { listCodexAuthAccounts } from "../../src/codex/auth-api/account-list";
+import { bindCodexAccountEgressConfig, unbindCodexAccountEgressConfig } from "../../src/codex/account-egress-runtime";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { resetCodexModelEntitlementCacheForTests, resolveCodexModelEntitlements, type CodexModelEntitlementCredentialSnapshot } from "../../src/codex/model-entitlements";
 import { runPassiveRead } from "../../src/lib/passive-read";
@@ -59,6 +60,7 @@ beforeEach(() => {
   previousFetch = globalThis.fetch;
   stateDir = mkdtempSync(join(tmpdir(), "ocx-hub-account-refresh-state-"));
   process.env.OPENCODEX_HOME = stateDir;
+  bindCodexAccountEgressConfig(config());
   mkdirSync(join(stateDir, "codex"), { recursive: true });
   modelStatus = 200;
   modelRequests = [];
@@ -81,6 +83,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  unbindCodexAccountEgressConfig();
   resetCodexModelEntitlementCacheForTests();
   globalThis.fetch = previousFetch;
   if (previousOpenCodexHome === undefined) delete process.env.OPENCODEX_HOME;

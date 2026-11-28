@@ -12,6 +12,14 @@ import { enrichOpenCodeZenUpstreamMessage } from "../../providers/opencode-zen-r
 import { stampMetaMusePlanRefusal } from "../../providers/meta-muse-plan-refusal";
 import { isCyberPolicyCode, CYBER_POLICY_FALLBACK_MESSAGE } from "../../lib/errors";
 import type { RequestFailureCause } from "../../usage/telemetry-contract";
+import { clientFacingModelText } from "../../lib/error-destination";
+import { isXaiResponsesDestination } from "../../providers/xai-transport";
+import { projectLocalModelRefusalLog } from "../request-log-failure-detail";
+import type { TranslatorBudget } from "../../lib/translator-budget";
+import type { OcxProviderConfig } from "../../types";
+import type { ResponsesRequestContext } from "./core-options";
+import { jsonContextOverflowResponse, streamingContextOverflowResponse } from "./context-overflow";
+import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 
 /** The provider facts the Zen enrichment reads; a name or endpoint alone is not enough. */
 export interface AdapterFailureProviderFacts {
@@ -65,4 +73,31 @@ export function formatAdapterUpstreamFailure(input: AdapterFailureMessageInput):
       },
     ));
   return { normalized, message };
+}
+
+/** Project overflow and xAI policy refusals after the caller records the upstream error. */
+export function projectAdapterUpstreamRefusal(
+  status: number,
+  errorText: string,
+  { route, clientRequestedStream, translatorBudget }: {
+    route: { provider: OcxProviderConfig };
+    clientRequestedStream: boolean;
+    translatorBudget: TranslatorBudget;
+  },
+  { options, logCtx }: Pick<ResponsesRequestContext, "options" | "logCtx">,
+): Response | null {
+  if (status === 413) {
+    if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
+    return clientRequestedStream
+      ? streamingContextOverflowResponse(clientFacingModelText(options.clientModelLabel), translatorBudget)
+      : jsonContextOverflowResponse();
+  }
+  return rewriteUpstreamPolicyRefusal({
+    status, errorText, stream: clientRequestedStream,
+    modelId: clientFacingModelText(options.clientModelLabel),
+    // Both xAI hosts also serve the Chat wire.
+    destinationIsXai: isXaiResponsesDestination(route.provider),
+    translatorBudget,
+    turnAdmissionLease: options.turnAdmissionLease,
+  });
 }
