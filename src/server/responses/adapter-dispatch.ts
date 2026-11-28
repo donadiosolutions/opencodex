@@ -1,6 +1,5 @@
-import { projectLocalModelRefusalLog, recordUpstreamProviderErrorDetail } from "../request-log-failure-detail";
+import { recordUpstreamProviderErrorDetail } from "../request-log-failure-detail";
 import { providerAffinityGenerationIsCurrent } from "../../providers/api-key-selection";
-import { clientFacingModelText } from "../../lib/error-destination";
 import { createAnthropicImageRecovery, recoverAdapterImageContext, retainAdapterFailureResponse } from "./image-context-recovery";
 import { responsesSpendTarget } from "./request-spend-target";
 import { bindAdapterResponseSpend } from "./request-spend";
@@ -42,7 +41,6 @@ import { credentialRecoveryStatus } from "../request-log-attempt-recovery";
 import { anthropicPoolCooldownResponse, clientCancelledResponse, readDisplaySafeErrorText } from "./core-errors";
 import { isTranslatorBudgetExceededError } from "../../lib/translator-budget";
 import { redactSecretString } from "../../lib/redact";
-import { rewriteUpstreamPolicyRefusal } from "./policy-refusal";
 import { carryPolicyCandidateRefusal, HostedAdvisorSpendRefusal } from "./policy-request-scope";
 import { withProviderRequestSlot } from "../../providers/request-pacing";
 import { providerFetch, fetchWithHeaderTimeout, safeHostLabel } from "./fetch-helpers";
@@ -57,7 +55,6 @@ import {
   hasKeyPoolFailover,
   rotateProviderTransportOn401,
   rateLimitRetryDelayMs,
-  readQuotaResetAt,
   rotateProviderTransportOn429,
 } from "../../providers/key-failover";
 import {
@@ -83,7 +80,7 @@ import { normalizeFinalKiroHttpError } from "../../adapters/kiro-retry";
 import { noteKiroMonthlyRefusal } from "../../providers/kiro-usage";
 import { persistKiroAccountState } from "../../providers/kiro-account-state-disk";
 import { isXaiGrokOAuth, isXaiLegacyPrivacyError, xaiPrivacyModeRefusal } from "../../providers/xai-privacy-mode";
-import { isXaiResponsesDestination, resolveProviderTransport } from "../../providers/xai-transport";
+import { resolveProviderTransport } from "../../providers/xai-transport";
 import { resolveCopilotApiBaseUrl } from "../../oauth/github-copilot";
 import { resolveWireProtocolOverride } from "../adapter-resolve";
 import { bindRouteReasoningReplayScope } from "./core-replay";
@@ -111,9 +108,9 @@ import {
 import { createAnthropicThinkingRecovery } from "./anthropic-thinking-recovery";
 import { shouldAttemptImageTierRetry } from "../image-retry";
 import { isTransientConsoleGoUploadRejection } from "../../providers/opencode-zen-rate-limit";
-import { formatAdapterUpstreamFailure } from "./adapter-failure-message";
-import { consumeComboFailure } from "./core-combo-failure";
-import { streamingContextOverflowResponse, jsonContextOverflowResponse, lateAttributionLimitResponse } from "./context-overflow";
+import { formatAdapterUpstreamFailure, projectAdapterUpstreamRefusal } from "./adapter-failure-message";
+import { consumeComboFailure, readQuotaRefusal, recordGenericAccountRefusal } from "./core-combo-failure";
+import { lateAttributionLimitResponse } from "./context-overflow";
 import { OllamaLateAttributionBudgetError } from "../../adapters/ollama-native";
 import { isFixedCodexAccount } from "./core-codex-account";
 import { recordSubagentQuotaFailureForThreadSpawn } from "../../codex/subagent-model-fallback";
@@ -1312,14 +1309,9 @@ export async function prepareAdapterExchange(
         // released below; a failed or slow read just leaves the header path in charge.
         // Peeks a bounded prefix and hands back a Response still carrying the whole
         // body, so the cancel below still releases the socket.
-        let peeked: Awaited<ReturnType<typeof readQuotaResetAt>>;
-        try {
-          peeked = await readQuotaResetAt(upstreamResponse, { signal: options.abortSignal });
-        } catch {
-          cleanupUpstreamAbort();
-          upstream.abort();
-          return clientCancelledResponse();
-        }
+        // The same prefix tells a spent quota from a rate limit, for a quota-only Combo leaving the pool.
+        const peeked = await readQuotaRefusal(upstreamResponse, options.abortSignal).catch(() => undefined);
+        if (!peeked) { cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse(); }
         if (options.abortSignal?.aborted) {
           cleanupUpstreamAbort();
           upstream.abort();
@@ -1333,6 +1325,7 @@ export async function prepareAdapterExchange(
           attemptedKey: route.provider.apiKey,
           promptCacheKey: parsed.options.promptCacheKey,
           quotaResetAt,
+          quotaExhausted: peeked.quotaExhausted,
         });
         if (!rotated) break;
         if (billingRecoveryActive && (options.abortSignal?.aborted || upstream.signal.aborted)) {
@@ -1581,6 +1574,10 @@ export async function prepareAdapterExchange(
         && transportState.genericFailovers < transportState.genericFailoverLimit
         && isGenericOAuthFailoverEnabled(config, route.providerName)
       ) {
+        // Record whether this refusal proved a spent quota, for a quota-only Combo's sibling check.
+        const refusal = await readQuotaRefusal(upstreamResponse, options.abortSignal).catch(() => undefined);
+        if (!refusal) { cleanupUpstreamAbort(); upstream.abort(); return clientCancelledResponse(); }
+        upstreamResponse = refusal.response;
         // Intersection with the shared request budget. This arm re-sends through
         // rebuildAndRefetch, so the roster cap alone would let one request walk the roster on
         // an allowance the rest of the request cannot see. A refusal ends the ladder with the
@@ -1603,6 +1600,8 @@ export async function prepareAdapterExchange(
           !adapterOwnsDispatch && genericRefetchCountsSends(),
         );
         if (!hop.allowed) break;
+        recordGenericAccountRefusal(route.providerName, transportState.genericFailoverAccountId,
+          route.modelId, upstreamResponse.headers.get("retry-after"), refusal.quotaExhausted);
         const nextAccountId = rotateGenericOAuthAccountOn429(
           config,
           route.providerName,
@@ -1884,7 +1883,16 @@ export async function prepareAdapterExchange(
       if (route.providerName === "kiro")
         upstreamResponse = await normalizeFinalKiroHttpError(upstreamResponse, upstream.signal);
       const grokOAuth = isXaiGrokOAuth(route.providerName, route.provider);
+      const poolUsageLimit = (!options.comboAttempt || logCtx.comboQuotaOnlyFallback)
+        && upstreamResponse.status === 429 && anthropicInstance && route.provider.authMode === "oauth"
+        && !isNonReplayableResponse(upstreamResponse)
+        ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
+        : null;
       if (options.comboAttempt) {
+        if (poolUsageLimit) {
+          void upstreamResponse.body?.cancel().catch(() => {});
+          upstreamResponse = anthropicPoolCooldownResponse(poolUsageLimit, { comboAttempt: true, logCtx });
+        }
         // No pre-read guard: `consumeComboFailure` -> `readBoundedResponseBody` reads
         // `response.body` itself with the abort signal threaded through, and the combo
         // contract is that this body's getter is touched exactly once. A guard here would be
@@ -1907,27 +1915,10 @@ export async function prepareAdapterExchange(
       if (grokOAuth && isXaiLegacyPrivacyError(upstreamResponse.status, errorText)) return xaiPrivacyModeRefusal(logCtx);
       // The provider's own body (not a proxy-normalized one) may name its closed error class (#8446).
       if (!isProxyError(upstreamResponse)) recordUpstreamProviderErrorDetail(logCtx, upstreamResponse.status, errorText, upstreamResponse);
-      if (upstreamResponse.status === 413) {
-        if (options.clientModelLabel) projectLocalModelRefusalLog(logCtx, options.clientModelLabel);
-        return clientRequestedStream
-          ? streamingContextOverflowResponse(clientFacingModelText(options.clientModelLabel), translatorBudget)
-          : jsonContextOverflowResponse();
-      }
-      const policyRefusal = rewriteUpstreamPolicyRefusal({
-        status: upstreamResponse.status,
-        errorText,
-        stream: clientRequestedStream,
-        modelId: clientFacingModelText(options.clientModelLabel),
-        // The same host check covers the openai-chat wire: both xAI hosts serve Chat too.
-        destinationIsXai: isXaiResponsesDestination(route.provider),
-        translatorBudget,
-        turnAdmissionLease: options.turnAdmissionLease,
-      });
-      if (policyRefusal) {
-        // Codex-facing incomplete/content_filter. openai-responses passthrough
-        // uses the same helper after its 413 block.
-        return policyRefusal;
-      }
+      const projectedFailure = projectAdapterUpstreamRefusal(
+        upstreamResponse.status, errorText, { route, clientRequestedStream, translatorBudget }, { options, logCtx },
+      );
+      if (projectedFailure) return projectedFailure;
       if (!isFixedCodexAccount(admissionState.authCtx)) {
         recordSubagentQuotaFailureForThreadSpawn(
           req.headers,
@@ -1942,11 +1933,7 @@ export async function prepareAdapterExchange(
       // The last pool account just refused on spent quota and recovery found no replacement:
       // answer the usage limit now (#6991), so Codex stops instead of retrying into the local
       // refusal that every later attempt meets until the first window reopens.
-      const poolUsageLimit = upstreamResponse.status === 429 && anthropicInstance && route.provider.authMode === "oauth"
-        ? anthropicRoutingFor(anthropicInstance).anthropicPoolUsageLimitAfterRefusal(Date.now(), transportState.anthropicRouteDecision, route.modelId)
-        : null;
-      // Combo children returned above; the flag is passed anyway so this site states the same rule.
-      if (poolUsageLimit) return anthropicPoolCooldownResponse(poolUsageLimit, { comboAttempt: options.comboAttempt, logCtx });
+      if (poolUsageLimit) return anthropicPoolCooldownResponse(poolUsageLimit, { logCtx });
       // Upstreams occasionally echo request details in error bodies — scrub token-shaped
       // material before it reaches the client-facing error surface.
       const upstreamRetryAfter = upstreamResponse.headers.get("retry-after");

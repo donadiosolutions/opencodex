@@ -11,7 +11,7 @@ remain unchanged. A different credential or signing key starts a different scope
 `src/responses/turn-membership.ts` verifies versioned item IDs bound to that caller,
 thread, turn nonce, item kind and ordinal. IDs prove structural grouping only:
 they do not authenticate payload bytes, completion, execution permission or vendor
-metadata. `src/server/responses/request-prepare.ts` applies the pass before `parseRequest`. It keeps unique
+metadata. `src/server/responses/request-prepare-input.ts` applies the pass before `parseRequest`. It keeps unique
 real results and forms the buffered semantic-items/calls/results ordering only
 for authenticated closed spans. Invalid signed groups leave the entire input
 unchanged. The codec copies supplied key bytes independently of typed-array subclasses,
@@ -65,7 +65,7 @@ settlement or provider-opaque replay scope.
 
 The route-independent Claude bridge pool key agrees with final Codex selection; see [Claude affinity](../data-planes/inbound-compat.md#claude-affinity-at-final-go-dispatch).
 
-Right after continuation expansion, and only for a request that carries a Remote Link turn observer (a link WebSocket turn, or a relayed request with the link relay's internal token header), `request-prepare.ts` reports the expanded input to `src/server/link-turn.ts`; an expansion miss reports a failure. A request without an observer runs no code there, and the header is removed before anything is forwarded (`structure/remote-link.md`). The same seam receives the chain outcome (expanded, unexpanded or none) and, at the two refusals of an unexpanded continuation, marks the row's link continuation as a miss with reason missing.
+After `src/server/responses/request-prepare.ts` expands continuation input, and only for a request that carries a Remote Link turn observer (a link WebSocket turn, or a relayed request with the link relay's internal token header), `src/server/responses/request-prepare-input.ts` reports the expanded input to `src/server/link-turn.ts`; an expansion miss reports a failure. A request without an observer runs no code there, and the header is removed before anything is forwarded (`structure/remote-link.md`). The same seam receives the chain outcome (expanded, unexpanded or none) and, at the two refusals of an unexpanded continuation, marks the row's link continuation as a miss with reason missing.
 
 When the selected route targets canonical ChatGPT and its continuation cannot be expanded, request preparation logs the selected provider and model with `previous_response_not_found` and synthetic provenance. If preparation made no inference send, the row has `local-refusal` and no physical attempt. Opt-in encrypted-task recovery can send before a reroute to native fallback. In that case the row preserves the recovery attempts with their own model, status, and any reported usage. A client resend carrying the full history is a separate request.
 

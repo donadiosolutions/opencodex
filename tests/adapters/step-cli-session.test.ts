@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { describe, expect, test } from "bun:test";
 
 import { createStepCliAdapter } from "../../src/adapters/step-cli/adapter";
+import { mapSessionFailure } from "../../src/adapters/step-cli/errors";
 import { sessionHandlers } from "../../src/adapters/step-cli/events";
 import type { AdapterEvent } from "../../src/types";
 import { incoming, parsed, provider } from "../helpers/step-cli-ownership";
@@ -454,6 +455,55 @@ describe("StepCode session pool", () => {
     reverseRequestHoldMs: 500,
     idleTimeoutMs: 60_000,
     killGraceMs: 10,
+  });
+
+  test("pool capacity counts opening and closing sessions while existing conversations can continue", async () => {
+    const children: FakeStep["child"][] = [];
+    const pool = new StepSessionPool(
+      { openCodexHome: tmpdir(), idleTimeoutMs: 60_000, buildOptions: () => ({ ...options(), cwd: tmpdir() }) },
+      { onEvent: () => undefined },
+      { spawn: () => {
+        const child = fakeChild();
+        children.push(child);
+        return child;
+      }, platform: "linux" },
+    );
+    const refs = Array.from({ length: 8 }, () => pool.nextRef());
+    const next = pool.nextRef();
+    try {
+      const opening = refs.map(ref => pool.open(ref));
+      const reuse = pool.open(refs[0]!);
+      await expect(pool.open(next).catch(mapSessionFailure)).resolves.toMatchObject({
+        status: 503, code: "step_cli_pool_full", errorType: "server_error", retryable: true,
+      });
+      const sessions = await Promise.all(opening);
+      expect(await reuse).toBe(sessions[0]!);
+      expect(await pool.open(refs[1]!)).toBe(sessions[1]!);
+      expect(children).toHaveLength(8);
+
+      const closingPeer = Promise.withResolvers<FakeStep["child"]>();
+      for (const child of children) {
+        child.kill = () => {
+          closingPeer.resolve(child);
+          return true;
+        };
+      }
+      const closing = sessions[0]!.close();
+      const child = await closingPeer.promise;
+      await expect(pool.open(next)).rejects.toMatchObject({ code: "step_cli_pool_full" });
+      child.exitCode = 0;
+      child.emit("close", 0, null);
+      await closing;
+      const replacement = await pool.open(next);
+      expect(pool.get(next)).toBe(replacement);
+      expect(children).toHaveLength(9);
+    } finally {
+      for (const child of children) {
+        child.exitCode = 0;
+        child.emit("close", 0, null);
+      }
+      await pool.closeAll();
+    }
   });
 
   test("two concurrent opens of one conversation share a single process", async () => {

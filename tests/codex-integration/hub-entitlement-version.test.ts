@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { bindCodexAccountEgressConfig, unbindCodexAccountEgressConfig } from "../../src/codex/account-egress-runtime";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { loadPersistedCodexRuntime } from "../../src/codex/runtime";
 import {
@@ -56,6 +57,7 @@ beforeEach(() => {
   isolated = installIsolatedCodexHome("ocx-hub-entitlement-version-");
   previousHome = process.env.OPENCODEX_HOME;
   process.env.OPENCODEX_HOME = isolated.path;
+  bindCodexAccountEgressConfig({ ...config, providers: {} });
   resetCodexModelEntitlementCacheForTests();
   saveCodexAccountCredential(ACCOUNT, {
     accessToken: "hub-token", refreshToken: "hub-refresh", chatgptAccountId: "hub-account",
@@ -63,6 +65,7 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
+  unbindCodexAccountEgressConfig();
   resetCodexModelEntitlementCacheForTests();
   if (previousHome === undefined) delete process.env.OPENCODEX_HOME;
   else process.env.OPENCODEX_HOME = previousHome;

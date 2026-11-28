@@ -216,7 +216,7 @@ target/effort allowlist stay authoritative. The note reaches TypeSafe with each
 applicable decision, so operators must keep secrets and private paths out of it.
 An absent note leaves the prior decision payload shape intact.
 
-`src/server/responses/core-combo.ts` computes current eligibility and asks JEV once for the initial pick.
+`src/server/responses/core-combo.ts` uses `src/server/responses/jev-combo-choice.ts` to enumerate eligible choices and asks JEV once for the initial pick.
 Candidate enumeration carries the initial pick's request-scoped cooldown reservation and cannot
 reserve another pass. After the decision returns, reserved requests recheck current eligibility and
 cooldown revisions before dispatch. A stale choice fails open to the first remaining eligible target

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { bindCodexAccountEgressConfig, unbindCodexAccountEgressConfig } from "../../src/codex/account-egress-runtime";
 import { poolAccountDto } from "../../src/codex/auth-api/account-list";
 import { readCodexAccountRecord, saveCodexAccountCredential } from "../../src/codex/account-store";
 import { MAIN_CODEX_ACCOUNT_ID } from "../../src/codex/main-account";
@@ -48,6 +49,7 @@ async function observe(accountId: string, rows: Record<string, unknown>[], versi
 beforeEach(() => {
   isolated = installIsolatedCodexHome("ocx-account-badges-");
   resetCodexModelEntitlementCacheForTests();
+  bindCodexAccountEgressConfig({ providers: {}, codexAccounts: [{ id: pool, email: "pool@example.test", isMain: false }] });
   writeFileSync(join(isolated.path, "auth.json"), JSON.stringify({
     tokens: { access_token: "main-token", account_id: "main-chatgpt" },
   }));
@@ -56,7 +58,10 @@ beforeEach(() => {
     expiresAt: Date.now() + 60_000, chatgptAccountId: "pool-chatgpt",
   });
 });
-afterEach(() => resetCodexModelEntitlementCacheForTests());
+afterEach(() => {
+  resetCodexModelEntitlementCacheForTests();
+  unbindCodexAccountEgressConfig();
+});
 
 test("projects each account's confirmed grants into the pool DTO", async () => {
   const now = Date.now();

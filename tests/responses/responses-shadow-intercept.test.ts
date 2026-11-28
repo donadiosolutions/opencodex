@@ -665,10 +665,9 @@ describe("a combo shadow-call target enters the failover loop (#4129)", () => {
     expect(comboDispatchStart).toBeGreaterThanOrEqual(0);
     expect(comboDispatchEnd).toBeGreaterThan(comboDispatchStart);
     const comboDispatch = prepare.slice(comboDispatchStart, comboDispatchEnd);
-    const parsedHandoff = prepare.slice(
-      prepare.indexOf("if (cursorClientThreadId) parsed._cursorClientThreadId"),
-      prepare.indexOf("} catch (err)", prepare.indexOf("if (cursorClientThreadId) parsed._cursorClientThreadId")),
-    );
+    const parseInput = readFileSync(repoPath("src/server/responses/request-prepare-input.ts"), "utf8");
+    const cursorHandoff = parseInput.indexOf("if (cursorClientThreadId) parsed._cursorClientThreadId");
+    const parsedHandoff = parseInput.slice(cursorHandoff, parseInput.indexOf("} catch (err)", cursorHandoff));
 
     expect(comboDispatch).toContain("shadowCallIntercepted,");
     expect(parsedHandoff).toContain(
